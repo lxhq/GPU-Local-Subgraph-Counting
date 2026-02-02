@@ -195,9 +195,12 @@ int main(int argc, char **argv) {
     std::cout << std::endl;
     /****************** allocate the device memory ***********/
     if (memory_pool_size == 0) {
-        memory_pool_size = TO_GB(prop.totalGlobalMem) * 0.9;
-        std::cout << "Memory pool (-mem) not set. Allocating 90% of device memory: " 
-              << memory_pool_size << " GB (Total: " << TO_GB(prop.totalGlobalMem) << " GB)" << std::endl;    
+        // Get the memory info from the GPU
+        size_t free_byte, total_byte;
+        cudaError_t status = cudaMemGetInfo(&free_byte, &total_byte);
+        memory_pool_size = TO_GB(free_byte * 0.9);
+        std::cout << "Memory pool (-mem) not set. Allocating 90% of total free device memory: "
+              << memory_pool_size << " GB (Total Free Memory: " << TO_GB(free_byte) << " GB)" << std::endl;
     } else {
         if (memory_pool_size > TO_GB(prop.totalGlobalMem)) {
             throw std::runtime_error("not enough GPU memory, preset: " + std::to_string(memory_pool_size) + ", actual: " + std::to_string(TO_GB(prop.totalGlobalMem)));
