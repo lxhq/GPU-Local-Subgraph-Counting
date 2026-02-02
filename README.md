@@ -1,4 +1,4 @@
-# GPU-Accelerated SCOPE
+# GPU-Accelerated Local Subgraph Counting
 
 ## Background
 
