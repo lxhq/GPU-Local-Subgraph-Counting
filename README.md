@@ -6,6 +6,31 @@ We start this project by forking from [SCOPE](https://github.com/magic62442/subg
 
 We study **local subgraph counting queries**, denoted as $Q=(q,o)$. The goal is to count how many times a given $k$-node pattern graph $q$ appears around every node $v$ in a data graph $G$, such that the node orbit $o$ in $q$ maps to $v$.
 
+## System Configuration
+### 1. Compilers and Build Tools
+Please ensure that ```gcc```, ```g++```, ```cmake```, and ```make``` are installed. You can verify the installations and check their versions using:
+```shell
+gcc --version
+g++ --version
+cmake --version
+make --version
+```
+> **Note:** Please ensure the versions of gcc and g++ are aligned (i.e., they are the same version). Mismatched versions may cause the compiler to fail when linking C++ standard libraries.
+
+**Reference**: In our experiments, we used GCC/G++ 11.4.0.
+
+### 2. CUDA Environment
+Please ensure that the NVIDIA GPU driver and the CUDA compiler (```nvcc```) are both installed. You can check their status with:
+```shell
+# Check GPU driver status
+nvidia-smi
+# Check CUDA compiler version
+nvcc --version
+```
+If these tools are missing, please download and install the CUDA Toolkit from the [official NVIDIA website](https://developer.nvidia.com/cuda/toolkit).
+
+**Reference**: In our experiments, we used CUDA Toolkit 12.8.
+
 ## Prerequisites
 
 Before building the project, please verify or compile the required dependencies.
@@ -168,7 +193,7 @@ The output file contains the local subgraph counts. The $i$-th line corresponds 
 
 ## Advanced Configuration (Optional)
 
-The following arguments are available for fine-tuning performance. **The default values are optimized for most cases and usually do not need to be changed.**
+The following arguments are available for fine-tuning performance. **We simply used the default value in our experiment**
 
 | Option | Description |
 | --- | --- |
