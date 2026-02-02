@@ -92,7 +92,7 @@ For example, if an **RTX 5090** is used, it has a compute capability of **12.0**
 
 ### 2. Compile the Project
 
-Build the project using CMake. Replace `120` below with your GPU's specific architecture code.
+Build the project using CMake. Replace `120`(12.0 → 120) below with your GPU's specific architecture code.
 
 ```shell
 mkdir build
