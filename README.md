@@ -75,7 +75,7 @@ sudo make install
 ```
 
 **Linking Verification:**
-Pay attention to the output of `sudo make install`. The headers and libraries are usually installed in:
+Pay attention to the output of `sudo make install`. In our experiment, the headers and libraries are installed in:
 
 * `/usr/local/include`
 * `/usr/local/lib`
