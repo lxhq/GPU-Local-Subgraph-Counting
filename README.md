@@ -51,9 +51,8 @@ cd utility/automorphism/
 
 # Edit the makefile to add -fPIC to the CFLAGS
 # 1. Open the makefile
-# 2. Append '-fPIC' to the end of line 6
 vim makefile
-# add -fPIC to the end of line 6.
+# 2. Append '-fPIC' to the end of line 6 (CFLAGS=...)
 
 make
 mv nauty.a libnauty.a
@@ -100,7 +99,6 @@ mkdir build
 cd build
 cmake -DCMAKE_CUDA_ARCHITECTURES=120 ..
 make
-
 ```
 
 ### 3. Optional Build Arguments
