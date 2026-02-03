@@ -1,12 +1,8 @@
 # GPU-Accelerated Local Subgraph Counting
 
-## Background
-
-We start this project by forking from [SCOPE](https://github.com/magic62442/subgraph-counting).
-
-We study **local subgraph counting queries**, denoted as $Q=(q,o)$. The goal is to count how many times a given $k$-node pattern graph $q$ appears around every node $v$ in a data graph $G$, such that the node orbit $o$ in $q$ maps to $v$.
-
 ## System Configuration
+This project is intended to be built and run on Linux. We run our experiments on Ubuntu 22.04 LTS.
+
 ### 1. Compilers and Build Tools
 Please ensure that ```gcc```, ```g++```, ```cmake```, and ```make``` are installed. You can verify the installations and check their versions using:
 ```shell
@@ -185,9 +181,17 @@ The executable is located at `./build/executable/scope.out`.
 > **Note:** Please make sure the result directory exist. Otherwise, the result file won't be written. For example, please make sure '''./result/web-spam/5voc/''' exist before executing above commands.
 ### Output
 
-The output file contains the local subgraph counts. The $i$-th line corresponds to the count for **Node ID $i-1$** in the data graph.
+The output file contains the local subgraph counts. The $i$-th line corresponds to the count for **Vertex ID $i-1$** in the data graph.
 
----
+For example, consider the output below (**the bracketed line numbers are added for readability and are not part of the output file**):
+```text
+[1] 0
+[2] 0
+... ...
+[4766] 2569147
+[4767] 2390996
+```
+As the vertex IDs always start from 0, **line 1 represents** the local subgraph count for **vertex 0**, and similarly **line 4767 represents** the local subgraph count for vertex 4766.
 
 ## Advanced Configuration (Optional)
 
