@@ -191,7 +191,7 @@ The output file contains the local subgraph counts. The $i$-th line corresponds 
 
 ## Advanced Configuration (Optional)
 
-The following arguments are available for fine-tuning performance. **We simply used the default value in our experiment**
+The following arguments are available for fine-tuning performance.
 
 | Option | Description |
 | --- | --- |
