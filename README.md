@@ -202,3 +202,9 @@ The following arguments are available for fine-tuning performance.
 | `-prob` | The probing budget for the open-addressing hash table. **Default: 64**. |
 | `-mem` | Total device memory budget (in GB). **Default: 90% of available memory**. |
 | `-ratio` | Ratio between memory for Subgraph Enumeration (SE) and Hash Table (HT). **Default: 1**. |
+
+## Comparison
+
+In the paper, we report the speedup over the original CPU SCOPE implementation. Our goal is to process queries **without any pre-built index**. We found that the original [SCOPE](https://github.com/magic62442/subgraph-counting) code may encounter runtime errors when running without a pre-built triangle index (```-t``` option).
+
+For reproducibility, we include our bug-fixed version of SCOPE in the `SCOPE` branch of this repository. The build process is similar to the build process for this GPU version (see above).
