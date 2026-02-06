@@ -3,7 +3,7 @@ link_directories(../utility/automorphism)
 set (PREPROCESS_SRC
         prepare.cpp)
 set (SCOPE_SRC
-        scope.cu)
+        scope.cpp)
 set (BATCH_SRC
         batch.cpp)
 set (FIVE_SRC
@@ -13,6 +13,6 @@ add_executable(scope.out ${SCOPE_SRC})
 add_executable(batch.out ${BATCH_SRC})
 add_executable(5voc.out ${FIVE_SRC})
 target_link_libraries(preprocess.out graph counting utility)
-target_link_libraries(scope.out graph plan counting utility gpu-lsc)
+target_link_libraries(scope.out graph plan counting utility)
 target_link_libraries(batch.out graph plan counting utility)
 target_link_libraries(5voc.out graph plan counting utility)

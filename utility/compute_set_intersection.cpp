@@ -85,7 +85,7 @@ void ComputeSetIntersection::ComputeCandidates(const VertexID* larray, const ui 
 #endif
 }
 
-ui ComputeSetIntersection::GallopingSearch(const VertexID *src, const ui begin, const ui end,
+const ui ComputeSetIntersection::GallopingSearch(const VertexID *src, const ui begin, const ui end,
                                                  const ui target) {
     if (src[end - 1] < target) {
         return end;
@@ -170,12 +170,9 @@ void ComputeSetIntersection::LeapfrogJoin(VertexID **arrays, ui *counts, ui num,
         if (counts[i] == 0)
             return;
     }
-    // iters records the current pointer in each array
     ui *iters = new ui[num];
     memset(iters, 0, sizeof(ui) * num);
     int p = 0;
-
-    // sort all arrays by the first element
     for (int i = 0; i < num; ++i) {
         for (int j = i + 1; j < num; ++j) {
             if (arrays[j][0] < arrays[i][0]) {
@@ -184,9 +181,7 @@ void ComputeSetIntersection::LeapfrogJoin(VertexID **arrays, ui *counts, ui num,
             }
         }
     }
-    // xPrime is the largest first element among all arrays
     VertexID xPrime = arrays[num - 1][0];
-
     while (true) {
         VertexID x = arrays[p][iters[p]];
         if (x == xPrime) {
@@ -565,7 +560,7 @@ void ComputeSetIntersection::ComputeCNMergeBasedAVX2(const VertexID* larray, con
     return;
 }
 
-ui ComputeSetIntersection::BinarySearchForGallopingSearchAVX2(const VertexID* array, ui offset_beg, ui offset_end, ui val) {
+const ui ComputeSetIntersection::BinarySearchForGallopingSearchAVX2(const VertexID* array, ui offset_beg, ui offset_end, ui val) {
     while (offset_end - offset_beg >= 16) {
         auto mid = static_cast<uint32_t>((static_cast<unsigned long>(offset_beg) + offset_end) / 2);
         _mm_prefetch((char *) &array[(static_cast<unsigned long>(mid + 1) + offset_end) / 2], _MM_HINT_T0);
@@ -601,7 +596,7 @@ ui ComputeSetIntersection::BinarySearchForGallopingSearchAVX2(const VertexID* ar
     return offset_end;
 }
 
-ui ComputeSetIntersection::GallopingSearchAVX2(const VertexID* array, ui offset_beg, ui offset_end, ui val) {
+const ui ComputeSetIntersection::GallopingSearchAVX2(const VertexID* array, ui offset_beg, ui offset_end, ui val) {
     if (array[offset_end - 1] < val) {
         return offset_end;
     }

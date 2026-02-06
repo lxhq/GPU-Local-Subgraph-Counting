@@ -1517,9 +1517,6 @@ void Tree::setPrefixKeyOrbit(const Pattern &p) {
 }
 
 // get rooted trees based on aggregation vertices in the pattern
-// the tree node contains orbit vertex/aggregation vertex should changed to be the root of the tree
-// The covered pattern may not own a orbit vertex but own aggregation vertices
-// so there are multiple variantions of this change
 std::vector<Tree> Tree::getRootedTrees(const PatternGraph &p, bool sign) {
     std::vector<Tree> rootedTrees;
     // if aggregation type is 0 (global counting), any node can be root.
@@ -2725,7 +2722,6 @@ void Tree::initPoses(const Pattern &p, bool useTriangle) {
                     VertexID nID = _postOrder[startPos + j];
                     if (!prefixCovered[j]) {
                         bool flag = true;
-                        // if some of this node's children are not covered, then this node is not covered
                         for (VertexID c : _child[nID]) {
                             // find the position of c in the partition
                             int posC = 99;

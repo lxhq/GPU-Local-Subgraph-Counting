@@ -226,27 +226,24 @@ bool genEquation(const PatternGraph &p, std::map<int, std::vector<Pattern>> &pat
     std::vector<PatternGraph> inGraphs, outGraphs;
     Pattern rootPattern(p);
     // choose the best decomposition for the undirected P
-    // only core vertices are included in rootAllTree. All peripheral vertices are not included.
     std::vector<Tree> rootAllTree = getAllTree(rootPattern.u);
-    // insert peripheral vertices into the tree 
     std::vector<Tree> rootBestDecomp = getBestDecomposition(rootPattern, rootAllTree, visitedDecomp, true, prefix,
                                                             useTriangle);
     int uFactor = p.getAutoSize() / rootBestDecomp[0].getMultiFactor() / rootBestDecomp[0].getAggreWeight().size();
     Tree &rt = rootBestDecomp[0];
-    //Find common vertices among nodes and children nodes
-    // rt.rebuildCut();
-    // cn = ConNode(p, rt);
-    // if (cn.num != 0) {
-    //     int divideFactor = p.getDivideFactor();
-    //     patterns[divideFactor].push_back(rootPattern);
-    //     trees[divideFactor].push_back(rootBestDecomp);
-    //     conNodeDecompose(cn, p, rt.getNode(0), symmetryBreaking, prefix, useTriangle);
-    //     CanonType canonValue = p.getCanonValue();
-    //     gCanon2Pattern[canonValue] = rootPattern;
-    //     gCanon2Tree[canonValue] = rootBestDecomp;
-    //     gCanon2Shrinkage[canonValue] = computeShrinkages(rt, rootPattern);
-    //     return false;
-    // }
+    rt.rebuildCut();
+    cn = ConNode(p, rt);
+    if (cn.num != 0) {
+        int divideFactor = p.getDivideFactor();
+        patterns[divideFactor].push_back(rootPattern);
+        trees[divideFactor].push_back(rootBestDecomp);
+        conNodeDecompose(cn, p, rt.getNode(0), symmetryBreaking, prefix, useTriangle);
+        CanonType canonValue = p.getCanonValue();
+        gCanon2Pattern[canonValue] = rootPattern;
+        gCanon2Tree[canonValue] = rootBestDecomp;
+        gCanon2Shrinkage[canonValue] = computeShrinkages(rt, rootPattern);
+        return false;
+    }
     if (p.getNumVertices() < 6 && uFactor > 1 && symmetryBreaking && rootBestDecomp[0].getFhw() >= 2.0) {
         Pattern rootMulti = rootPattern;
         rootMulti.setMultiAggre();
@@ -391,7 +388,6 @@ bool genEquation(const PatternGraph &p, std::map<int, std::vector<Pattern>> &pat
                 q.push(shr);
             }
         }
-        // compute the tiso tree for each of the covered patterns recursively
         while (!q.empty()) {
             std::vector<Pattern> pts;
             // pop all patterns in queue

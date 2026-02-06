@@ -187,7 +187,6 @@ void DataGraph::loadDataGraph(const std::string &file) {
     buildLargerOffset();
 
     delete[] edgeList;
-    // printGraph();
 }
 
 DataGraph::DataGraph() {
@@ -243,42 +242,6 @@ void DataGraph::initSpecialSparse(specialsparse *sg) const {
             sg->edges[e].t = w;
         }
     }
-}
-
-void DataGraph::printGraph() const {
-    //_numVertices
-    printf("numVertices: %d\n", _numVertices);
-
-    //_numEdges
-    printf("numEdges: %d\n", _numEdges);
-
-    // _offsets
-    printf("_offsets: ");
-    for (int i = 0; i < _numVertices + 1; ++i) {
-        printf("%d ", _offsets[i]);
-    }
-    printf("\n");
-
-    // _nbors
-    printf("_nbors: ");
-    for (int i = 0; i < _numEdges; ++i) {
-        printf("%d ", _nbors[i]);
-    }
-    printf("\n");
-
-    // _degree
-    printf("_degree: ");
-    for (int i = 0; i < _numVertices; ++i) {
-        printf("%d ", _degree[i]);
-    }
-    printf("\n");
-
-    // _largerOffsets
-    printf("_largerOffsets: ");
-    for (int i = 0; i < _numVertices; ++i) {
-        printf("%d ", _largerOffsets[i]);
-    }
-    printf("\n");
 }
 
 PatternGraph::PatternGraph() {
@@ -985,10 +948,6 @@ void PatternGraph::buildCorePeripheral() {
         bin[d] = start;
         start += num;
     }
-
-    // similiar to the offset in the Graph class
-    // bin is the start position of vertices in vert
-    // For example bin[3] == 4 means all vertices with degrees == 3 starts at index 4 in vert
     for (int v = 1; v <= _numVertices; ++v) {
         pos[v] = bin[deg[v]];
         vert[pos[v]] = v;
@@ -1010,15 +969,12 @@ void PatternGraph::buildCorePeripheral() {
                 VertexID u = neighbors[j] + 1;
                 if (deg[u] > deg[v]) {
                     int du = deg[u], pu = pos[u], pw = bin[du], w = vert[pw];
-                    // if u is not the first vertex in its degree bin
-                    // swap u with w, w is the first vertex in its degree bin
                     if(u != w) {
                         pos[u] = pw;
                         vert[pu] = w;
                         pos[w] = pu;
                         vert[pw] = int(u);
                     }
-                    // shrink the range of original u's degree
                     ++bin[du];
                     --deg[u];
                 }

@@ -1,204 +1,102 @@
-# GPU-Accelerated Local Subgraph Counting
+# SCOPE
 
-## System Configuration
-This project is intended to be built and run on Linux. We run our experiments on Ubuntu 22.04 LTS.
+## Background
 
-### 1. Compilers and Build Tools
-Please ensure that ```gcc```, ```g++```, ```cmake```, and ```make``` are installed. You can verify the installations and check their versions using:
-```shell
-gcc --version
-g++ --version
-cmake --version
-make --version
-```
-> **Note:** Please ensure the versions of gcc and g++ are aligned (i.e., they are the same version). Mismatched versions may cause the compiler to fail when linking C++ standard libraries.
+We study local subgraph counting queries, Q = (p, o), to count how many times a given k-node pattern graph p appears around every node v in a data graph G when the given node orbit o in p maps to v. 
 
-**Reference**: In our experiments, we used GCC/G++ 11.4.0.
+## Compile
 
-### 2. CUDA Environment
-Please ensure that the NVIDIA GPU driver and the CUDA compiler (```nvcc```) are both installed. You can check their status with:
-```shell
-# Check GPU driver status
-nvidia-smi
-# Check CUDA compiler version
-nvcc --version
-```
-If these tools are missing, please download and install the CUDA Toolkit from the [official NVIDIA website](https://developer.nvidia.com/cuda/toolkit).
-
-**Reference**: In our experiments, we used CUDA Toolkit 12.8.
-
-## Prerequisites
-
-Before building the project, please verify or compile the required dependencies.
-
-### 1. hpc_helper and kiss_rng
-
-This project uses the GPU open-addressing hash table [warpcore](https://github.com/sleeepyjack/warpcore). It depends on [hpc_helper](https://gitlab.rlp.net/pararch/hpc_helpers) and [kiss_rng](https://github.com/sleeepyjack/kiss_rng).
-
-> **Note:** These dependencies will be downloaded **automatically** by CMake when you build the project. Please ensure you have an active Internet connection during the build process.
-
-### 2. Nauty Library
-
-The [nauty](https://pallini.di.uniroma1.it) library is used to compute automorphisms and symmetry-breaking rules. A copy is included in `utility/automorphism`.
+1. Compile and link to the [nauty](https://pallini.di.uniroma1.it) library.  The nauty library is used to compute automorphisms and symmetry-breaking rules. We include a copy of the nauty library in /utility/automorphisms and show the steps.
 
 ```shell
 cd utility/automorphism/
 ./configure
-
-# Edit the makefile to add -fPIC to the CFLAGS
-# 1. Open the makefile
-vim makefile
-# 2. Append '-fPIC' to the end of line 6 (CFLAGS=...)
-
 make
 mv nauty.a libnauty.a
 ```
 
-### 3. GLPK Library
-
-The [GLPK](https://www.gnu.org/software/glpk/) library is used to compute fractional edge covers. You must compile and install it.
-
-**Example Installation (v4.35):**
-You can download GLPK from the [GNU FTP](https://ftp.gnu.org/gnu/glpk/) and install it as follows:
+If it complains, "relocation R_X86_64_32 against `.rodata.str1.1' can not be used when making a shared object; recompile with the "-fPIC" option. 
 
 ```shell
-tar -xzf glpk-4.35.tar.gz
-cd glpk-4.35
-./configure
+cd utility/automorphism/
+vim makefile
+# add -fPIC to the end of line 6.
 make
-make check
-sudo make install
+mv nauty.a libnauty.a
 ```
 
-**Linking Verification:**
-Pay attention to the output of `sudo make install`. In our experiment, the headers and libraries are installed in:
+2. Compile and link to the [GLPK](https://www.gnu.org/software/glpk/) library. The GLPK library is used to compute fractional edge covers. Edit the paths in CMakeLists.txt accordingly.
 
-* `/usr/local/include`
-* `/usr/local/lib`
-
-If your installation path differs, please update the paths in `CMakeLists.txt` (around line 70) accordingly.
-
-## Build Instructions
-
-### 1. Determine Compute Capability
-
-Find your GPU's compute capability on the [NVIDIA Developer website](https://developer.nvidia.com/cuda/gpus).
-
-For example, if an **RTX 5090** is used, it has a compute capability of **12.0**.
-
-### 2. Compile the Project
-
-Build the project using CMake. Replace `120`(12.0 → 120) below with your GPU's specific architecture code.
+3. Build the project.
 
 ```shell
 mkdir build
 cd build
-cmake -DCMAKE_CUDA_ARCHITECTURES=120 ..
+cmake -DCMAKE_BUILD_TYPE=Release ..
 make
 ```
 
-### 3. Optional Build Arguments
+## Input format
 
-We provide a `HASH_TABLE_TYPE` option to select the backend implementation.
+The data graph should start with 'n, m' where n is the number of nodes and m is the number of undirected edges, followed by the edge list. The node id should be consecutive and should start from 0.
 
-| Value | Description | Paper Reference |
-| --- | --- | --- |
-| **0** | Use the original `warpcore` library. |  |
-| **1** | **(Default)** Use a lightweight `warpcore` (unused functionalities removed). | **GPU-SCOPE-LF** |
-| **2** | Use lock-based GPU hash tables. | **GPU-SCOPE-LOCK** |
-| **3** | Use dense arrays. | **GPU-SCOPE** |
+Example:
 
-**Example:**
-
-```shell
-cmake -DCMAKE_CUDA_ARCHITECTURES=120 -DHASH_TABLE_TYPE=3 ..
 ```
-Build **GPU-SCOPE** variant
-
-## Input Format
-
-### Data Graph
-
-The file must start with `n m` (vertices, undirected edges), followed by the edge list. Vertex IDs must be consecutive integers starting from 0.
-
-```text
 3 2
 0 1
 1 2
 ```
 
-### Query Graph
+The query graph file has an additional line, '1 id', where 'id' is this pattern's orbit(representative).
 
-The format is identical to the data graph, but with an additional footer line `1 id`, where `id` is the pattern's representative orbit.
+Example:
 
-```text
+```
 3 2
 0 1
 1 2
 1 0
 ```
 
-### Datasets
+The queries are in the ./exp/pattern_graph directory, and the data graphs can be downloaded from [SNAP](https://snap.stanford.edu/data/index.html) or the [Network Repository](https://networkrepository.com).
 
-The queries are provided in `./exp/pattern_graph`. Public data graphs can be downloaded from [SNAP](https://snap.stanford.edu/data/index.html) or [Network Repository](https://networkrepository.com).
+## Preprocessing
 
-**Our Processed Dataset:**
-We have made the dataset used in our experiments available on Google Drive:
-
-* **[Download Dataset Here](https://drive.google.com/file/d/1VRgUgbhtZ4C71_DsdzW0n9eCZvwgc6Qc/view?usp=sharing)**
-
-## Execution and Output
-
-The executable is located at `./build/executable/scope.out`.
-
-| Option | Required? | Description |
-| --- | --- | --- |
-| `-q` | Yes | Query graph path (single file) OR directory (batch mode). |
-| `-d` | Yes | Data graph path. |
-| `-r` | Optional | Result path (single file) OR directory (batch mode). |
-| `-b` | No | Batch mode flag (required if `-q` is a directory). |
-
-### Examples
-
-**Running a Single Query:**
+Usage:
 
 ```shell
-./build/executable/scope.out \
-  -q ./exp/pattern_graph/5voc/62.txt \
-  -d ./exp/data_graph/web-spam.txt \
-  -r ./result/web-spam/5voc/62.txt
+./preprocess.out <data graph input path> <reordered graph output path> <intersection cache output path>
 ```
 
-**Running a Batch of Queries:**
+We preprocessed the data graphs in our experiments by indexing triangles as a simple intersection cache. It is static, and there is no swap. This can make SCOPE faster. Note that EVOKE also index triangles., and DISC has a more advanced intersection cache with swapping.
 
-```shell
-./build/executable/scope.out \
-  -q ./exp/pattern_graph/5voc/ \
-  -d ./exp/data_graph/web-spam.txt \
-  -r ./result/web-spam/5voc/ \
-  -b
+## Execution and output
+
+### scope.out:
+
+| Option | Description                                                  |
+| ------ | ------------------------------------------------------------ |
+| -q     | the query graph path (single query) or directory (batch query) |
+| -d     | the data graph path                                          |
+| -t     | the intersection cache path, optional                        |
+| -r     | the result path (single query) or directory (batch query), optional |
+| -b     | with -b: batch query, without -b: single query               |
+| -share | with -share: enable sharing the computation of Cov pattern counts if there are multiple queries. without -share: disable sharing |
+
+Example:
+
 ```
-> **Note:** Please make sure the result directory exist. Otherwise, the result file won't be written. For example, please make sure '''./result/web-spam/5voc/''' exist before executing above commands.
-### Output
-
-The output file contains the local subgraph counts. The $i$-th line corresponds to the count for **Vertex ID $i-1$** in the data graph.
-
-For example, consider the output below (**the bracketed line numbers are added for readability and are not part of the output file**):
-```text
-[1] 0
-[2] 0
-... ...
-[4766] 2569147
-[4767] 2390996
+./build/executable/scope.out -q ./exp/pattern_graph/5voc -d ./exp/data_graph/web-spam.txt -t ./exp/data_graph/web-spamt.bin -r ./result/5voc/web-spam -b -share
+./build/executable/scope.out -q ./exp/pattern_graph/5voc/62.txt -d ./exp/data_graph/web-spam.txt -r ./result/5voc/web-spam/62.txt
 ```
-As the vertex IDs always start from 0, **line 1 represents** the local subgraph count for **vertex 0**, and similarly **line 4767 represents** the local subgraph count for vertex 4766.
 
-## Advanced Configuration (Optional)
+In the output, the $i$-th line shows the local subgraph count of the data node $i-1$.
 
-The following arguments are available for fine-tuning performance.
+### batch.out
 
-| Option | Description |
-| --- | --- |
-| `-prob` | The probing budget for the open-addressing hash table. **Default: 64**. |
-| `-mem` | Total device memory budget (in GB). **Default: 90% of available memory**. |
-| `-ratio` | Ratio between memory for Subgraph Enumeration (SE) and Hash Table (HT). **Default: 1**. |
+This version uses the precomputed plan for queries. We use it for GNN datasets, where there are thousands of relatively small data graphs to count. You need to specify the query graph path and intersection cache path. We provided generated plans in ./exp/plan for all 5-node and 6-node queries. To precompute plans for other query sets, you need to modify the function 'generatePlan' in 'batch.cpp'.
+
+### 5voc.out
+
+We further optimized the code for orbit counting for 5-vertex queries by hand, following the generated plans. This is not included in the paper. It is about 2-3 times faster than EVOKE. You need to specify the data graph path and intersection cache path.

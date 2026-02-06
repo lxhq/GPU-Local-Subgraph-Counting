@@ -18,16 +18,15 @@ extern double gTDTime;
 
 struct Node {
     int id;
-    VertexID *vertices;     // sorted
+    VertexID *vertices;
     ui numVertices;
     ui numSources;          // number of vertices that have 0 out degree
-    // cut vertices are the vertices common with the parent node
     VertexID *cut;          // sorted
     ui cutSize;
     VertexID *prefix;       // not sorted
     ui prefixSize;
     VertexID *key;          // sorted
-    ui keySize;             // 0: root node, aggregation defined in tree 1: key is vertex (cutSize == 1) 2: key is edge (cutSize == 2 && cut is an edge)
+    ui keySize;             // 0: root node, aggregation defined in tree 1: key is vertex 2: key is edge
     std::vector<VertexID> localOrder;
     std::vector<VertexID> nodeOrder;
     VertexID **automorphisms;
@@ -78,7 +77,7 @@ struct Node {
 class Tree {
 private:
     ui _numVertices;
-    int _multiFactor;                      // multiFactor is related to symmetry-breaking rules
+    int _multiFactor;
     Node *_nodes;
     std::vector<VertexID>* _v2n;           // for each pattern vertex, store the nodes that contains it.
     ui _numNodes;
@@ -89,7 +88,7 @@ private:
     std::vector<std::vector<VertexID>> _greaterRules; // symmetry breaking rules. greaterRules[i][j] : M[i] > M[j]
     std::vector<std::vector<VertexID>> _lessRules;
     int _orbitType;                         // 0: no orbit, 1: vertex orbit, 2: edge orbit
-    std::vector<VertexID> _aggreV;          // aggregation vertices of the root, Due the the re-construction needed from the symmetry-breaking rule. _aggreV may included more than the orbit vertices
+    std::vector<VertexID> _aggreV;          // aggregation vertices of the root
     std::vector<int> _aggreWeight;          // weight of each aggregation vertex, 1 by default
     ui _treeWidth;                             // maximum size of the subpattern that has to be enumerated
     ui _sumWidth;
@@ -98,23 +97,19 @@ private:
     std::vector<VertexID> _postOrder;       // postorder of node ID
     bool _executeMode;                      // true: executeTree false: multiJoinTree
     std::vector<int> _partitionPos;         // positions of nodes in the post order that can build full hash tables
-                                            // it is the end position of each partition. so to access the start position of partition i, use _partitionPos[i-1] + 1
     std::vector<std::vector<std::vector<VertexID>>> _nodesAtStep;
     // for partition i, when the jth vertex in _globalOrder[i] is matched, then nodes in _nodesAtStep[i][j] can be executed
     // if use multi join tree, dimension 1 is nID, dimension 2 is mapping size, dimension 3 are the children to call
     std::vector<std::vector<int>> _prefixPos;
     std::vector<std::vector<VertexID>> _globalOrder;
-    // for node nID, the position of the aggregation vertices in nodeOrder
+    // for node nID, the position of the aggregation vertices
     std::vector<std::vector<int>> _aggrePos;
     // for some vertices there is no intersection of (in-/out-) neighbors
     // for such vertices, we directly assign them neighbor pointers,
     // for other vertices, they are allocated a candidate list
-    // For example, for a triangle the _nodeInterPos = {false, false, true}
-    // we have first two falses because there is no need to do intersection for the first two vertices, which is a simple edge
     std::vector<std::vector<bool>> _partitionInterPos;
     std::vector<std::vector<bool>> _nodeInterPos;
     // for node nID, when the mappingSize is i, the positions of in-neighbors are in _nodeInPos[nID][i]
-    // If there are symmtry rules, we use _nodeInPos or nodeOutPos to avoid extra computation, othervise use _nodeUnPos
     std::vector<std::vector<std::vector<int>>> _nodeInPos;
     std::vector<std::vector<std::vector<int>>> _nodeOutPos;
     std::vector<std::vector<std::vector<int>>> _nodeUnPos;
