@@ -1,5 +1,38 @@
 #include "wrapper_variables.h"
 
+namespace {
+bool isPrimeBucketCount(uint64_t value) {
+    if (value < 2) {
+        return false;
+    }
+    if (value == 2 || value == 3) {
+        return true;
+    }
+    if (value % 2 == 0 || value % 3 == 0) {
+        return false;
+    }
+    for (uint64_t divisor = 5; divisor <= value / divisor; divisor += 6) {
+        if (value % divisor == 0 || value % (divisor + 2) == 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+uint64_t largestPrimeBucketCount(uint64_t value) {
+    if (value <= 3) {
+        return value;
+    }
+    if (value % 2 == 0) {
+        --value;
+    }
+    while (value > 3 && !isPrimeBucketCount(value)) {
+        value -= 2;
+    }
+    return value;
+}
+}
+
 // --------------------- warpcore wrapper --------------------- //
 WarpcoreWrapper::WarpcoreWrapper(const Tree &t, MemoryManager &memory_manager, const DataGraph &dun) : AggregationTableWrapper(t, memory_manager, dun) {
     this->d_d_partition_H = static_cast<warpcore::CountingHashTable<>**>(
@@ -82,14 +115,15 @@ void LockFreeHashTableWrapper::allocatePartitionHashTable(const Tree& t, MemoryM
                                                     uint64_t hashtableSize, std::vector<uint32_t>& nodesInPartition,
                                                     uint32_t parititionRootNode) {
     this->partitionHashtableBuckets = hashtableSize / (2 * sizeof(uint64_t));
-    this->partitionHashtableSize = hashtableSize / (2 * sizeof(uint64_t)) * (2 * sizeof(uint64_t));
+    this->partitionHashtableBuckets = largestPrimeBucketCount(this->partitionHashtableBuckets);
+    this->partitionHashtableSize = this->partitionHashtableBuckets * (2 * sizeof(uint64_t));
     for (int nID = 0; nID < t.getNumNodes(); nID++) {
         if (nID == parititionRootNode ||
             std::find(nodesInPartition.begin(), nodesInPartition.end(), nID) == nodesInPartition.end()) {
             continue;
         }
-        void* d_partition_H = memory_manager.allocate(hashtableSize, sizeof(uint64_t), "d_partition_H " + std::to_string(nID));
-        cudaErrorCheck(cudaMemset(d_partition_H, 0, hashtableSize));
+        void* d_partition_H = memory_manager.allocate(this->partitionHashtableSize, sizeof(uint64_t), "d_partition_H " + std::to_string(nID));
+        cudaErrorCheck(cudaMemset(d_partition_H, 0, this->partitionHashtableSize));
         cudaErrorCheck(cudaMemcpy(this->d_d_partition_H + nID, &d_partition_H, sizeof(void*), cudaMemcpyHostToDevice));
         this->h_d_partition_H[nID] = static_cast<uint64_t*>(d_partition_H);
     }
@@ -141,14 +175,15 @@ void LockBasedHashTableWrapper::allocatePartitionHashTable(const Tree& t, Memory
                                                     uint64_t hashtableSize, std::vector<uint32_t>& nodesInPartition,
                                                     uint32_t parititionRootNode) {
     this->partitionHashtableBuckets = hashtableSize / (6 * sizeof(uint64_t));
-    this->partitionHashtableSize = hashtableSize / (6 * sizeof(uint64_t)) * (6 * sizeof(uint64_t));
+    this->partitionHashtableBuckets = largestPrimeBucketCount(this->partitionHashtableBuckets);
+    this->partitionHashtableSize = this->partitionHashtableBuckets * (6 * sizeof(uint64_t));
     for (int nID = 0; nID < t.getNumNodes(); nID++) {
         if (nID == parititionRootNode ||
             std::find(nodesInPartition.begin(), nodesInPartition.end(), nID) == nodesInPartition.end()) {
             continue;
         }
-        void* d_partition_H = memory_manager.allocate(hashtableSize, sizeof(uint64_t), "d_partition_H " + std::to_string(nID));
-        cudaErrorCheck(cudaMemset(d_partition_H, 0, hashtableSize));
+        void* d_partition_H = memory_manager.allocate(this->partitionHashtableSize, sizeof(uint64_t), "d_partition_H " + std::to_string(nID));
+        cudaErrorCheck(cudaMemset(d_partition_H, 0, this->partitionHashtableSize));
         cudaErrorCheck(cudaMemcpy(this->d_d_partition_H + nID, &d_partition_H, sizeof(void*), cudaMemcpyHostToDevice));
         this->h_d_partition_H[nID] = static_cast<uint64_t*>(d_partition_H);
     }

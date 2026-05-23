@@ -1,5 +1,16 @@
 #include "execution_gpu.h"
 
+inline uint32_t growBatchStep(uint32_t step) {
+    if (step == UINT32_MAX) {
+        return step;
+    }
+    uint32_t grown = step + step / 2;
+    if (grown <= step) {
+        grown = step + 1;
+    }
+    return grown;
+}
+
 void copyMetaToGPU (
         const DataGraph &din,
         const DataGraph &dout,
@@ -310,13 +321,12 @@ void simpleTreeHelper(
             if (original_end != end) {
                 steps[level] = end - start;
             } else {
-                steps[level] = std::floor(steps[level] * 1.5);
+                steps[level] = growBatchStep(steps[level]);
             }
             update_global_average(end - start);
             // ------------ safeguard ------------//
             if (isSafeGuardMode[level]) {
                 isSafeGuardMode[level] = false;
-                steps[level] = UINT32_MAX;
                 // enable all children nodes' device partition, copy the content from hashtable host to device
                 for (uint32_t nID : nodesAtStep[level]) {
                     cudaErrorCheck(
@@ -688,13 +698,12 @@ void complexTreeHelper(
             if (original_end != end) {
                 steps[nID][level] = end - start;
             } else {
-                steps[nID][level] = std::floor(steps[nID][level] * 1.5);
+                steps[nID][level] = growBatchStep(steps[nID][level]);
             }
             update_global_average(end - start);
             // ------------ safeguard ------------//
             if (isSafeGuardMode[nID][level]) {
                 isSafeGuardMode[nID][level] = false;
-                steps[nID][level] = UINT32_MAX;
                 // enable all children nodes' device partition, copy the content from hashtable host to device
                 for (uint32_t cID : t.getNodesAtStep()[nID][level]) {
                     cudaErrorCheck(
