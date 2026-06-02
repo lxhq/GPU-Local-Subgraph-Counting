@@ -1,0 +1,12 @@
+# Build outputs
+build/
+
+# Nauty generated build artifacts
+utility/automorphism/*.o
+utility/automorphism/*.a
+utility/automorphism/*.so
+utility/automorphism/nauty.pc
+utility/automorphism/config.log
+utility/automorphism/config.status
+utility/automorphism/makefile
+utility/automorphism/nug28.pdf
