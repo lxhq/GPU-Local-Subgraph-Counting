@@ -207,4 +207,4 @@ The following arguments are available for fine-tuning performance.
 
 In the paper, we report the speedup over the original CPU SCOPE implementation. Our goal is to process queries **without any pre-built index**. We found that the original [SCOPE](https://github.com/magic62442/subgraph-counting) code may encounter runtime errors when running without a pre-built triangle index (```-t``` option).
 
-For reproducibility, we include our bug-fixed version of SCOPE in the `SCOPE` branch of this repository. The build process is similar to the build process for this GPU version (see above).
+For reproducibility, we include our bug-fixed version of SCOPE in the `SCOPE` branch of this repository. We also include our multi-threaded CPU baseline, SCOPE-MT, in the `SCOPE-MT` branch. The build process for both branches is similar to the build process for this GPU version (see above), except that SCOPE-MT additionally requires oneTBB.
