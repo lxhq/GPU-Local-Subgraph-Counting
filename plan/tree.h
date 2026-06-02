@@ -89,7 +89,7 @@ private:
     std::vector<std::vector<VertexID>> _greaterRules; // symmetry breaking rules. greaterRules[i][j] : M[i] > M[j]
     std::vector<std::vector<VertexID>> _lessRules;
     int _orbitType;                         // 0: no orbit, 1: vertex orbit, 2: edge orbit
-    std::vector<VertexID> _aggreV;          // aggregation vertices of the root, Due the the re-construction needed from the symmetry-breaking rule. _aggreV may included more than the orbit vertices
+    std::vector<VertexID> _aggreV;          // aggregation vertices of the root
     std::vector<int> _aggreWeight;          // weight of each aggregation vertex, 1 by default
     ui _treeWidth;                             // maximum size of the subpattern that has to be enumerated
     ui _sumWidth;

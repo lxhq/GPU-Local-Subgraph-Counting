@@ -10,15 +10,17 @@
 #include <map>
 
 enum OptionKeyword {
-    QueryGraphPath = 1,      // -q, the query graph file path
-    DataGraphPath = 2,       // -d, the data graph file path
-    TrianglePath = 3,        // -t, the triangle binary file path
-    ResultPath = 4,          // -r, the result file path
-    BatchQuery = 5,          // -b, batch query or single query
-    ShareNode = 6,           // -share, enable sharing nodes or not
-    HashtableSizeFactor = 7, // -ratio, the factor of hash table size
-    ProbLimit = 8,           // -prob, the limit of probability
-    MemoryPool=9             // -mem, the size of memory pool in GB
+    QueryGraphPath = 1,     // -q, the query graph file path
+    DataGraphPath = 2,      // -d, the data graph file path
+    TrianglePath = 3,       // -t, the triangle binary file path
+    ResultPath = 4,         // -r, the result file path
+    BatchQuery = 5,         // -b, batch query or single query
+    ShareNode = 6,          // -share, enable sharing nodes or not
+    ExecutionMode = 7,      // -m, execution mode (single or parallel)
+    NumThreads = 8,         // -n, number of threads
+    NodePartitionSize = 9,  // -np, node partition size
+    PrefixPartitionSize = 10, // -pp, prefix partition size
+    // PatternsParallelSize = 11 // -patp, patterns parallel size
 };
 
 class Command : public CommandParser {
@@ -27,7 +29,6 @@ private:
     std::map<OptionKeyword, std::string> optionsValue;
     std::map<OptionKeyword, bool> booleanOptionValue;
     std::map<OptionKeyword, int> intOptionValue;
-    std::map<OptionKeyword, float> floatOptionValue;
 
 private:
     void processOptions();
@@ -59,17 +60,25 @@ public:
         return booleanOptionValue[OptionKeyword::ShareNode];
     }
 
-    float getRatio() {
-        return floatOptionValue[OptionKeyword::HashtableSizeFactor];
+    std::string getExecutionMode() {
+        return optionsValue[OptionKeyword::ExecutionMode];
     }
 
-    uint32_t getProbLimit() {
-        return intOptionValue[OptionKeyword::ProbLimit];
+    int getNumThreads() {
+        return intOptionValue[OptionKeyword::NumThreads];
     }
 
-    uint32_t getMemoryPoolSize() {
-        return intOptionValue[OptionKeyword::MemoryPool];
+    int getNodePartitionSize() {
+        return intOptionValue[OptionKeyword::NodePartitionSize];
     }
+
+    int getPrefixPartitionSize() {
+        return intOptionValue[OptionKeyword::PrefixPartitionSize];
+    }
+
+    // int getPatternsParallelSize() {
+    //     return intOptionValue[OptionKeyword::PatternsParallelSize];
+    // }
 };
 
 

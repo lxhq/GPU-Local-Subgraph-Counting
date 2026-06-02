@@ -28,11 +28,11 @@
 #define SI 0
 #endif
 
-#define MAX_PATTERN_SIZE 7
-#define MAX_NUM_NODE 7
-
-//#define COLLECT_STATISTICS
-//#define ONLY_PLAN
+#define MAX_PATTERN_SIZE 10
+#define MAX_NUM_NODE 10
+// #define COLLECT_PARALLEL_STATISTICS
+// #define COLLECT_STATISTICS
+// #define ONLY_PLAN
 typedef uint32_t ui;
 typedef uint32_t VertexID;
 typedef uint32_t EdgeID;

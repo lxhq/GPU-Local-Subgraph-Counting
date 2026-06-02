@@ -465,7 +465,6 @@ void executeNode(
             candCount[mappingSize] = firstPosGreaterThan(candidate[mappingSize], 0, candCount[mappingSize], minTarget);
         }
     }
-
     int depth = 0;
     while (depth >= 0) {
         while (pos[mappingSize] < candCount[mappingSize]) {
@@ -567,6 +566,231 @@ void executeNode(
             --mappingSize;
             visited[dataV[mappingSize]] = false;
         }
+    }
+}
+
+void parallelNodeWorker(ParallelProcessingMeta *pMeta, 
+                        ui start,
+                        ui end,
+                        int depth,
+                        const DataGraph &din,
+                        const DataGraph &dout,
+                        const DataGraph &dun,
+                        const std::vector<VertexID> &child,
+                        bool isRoot,
+                        HashTable *H,
+                        int orbitType,
+                        const Node &tau,
+                        const std::vector<int> &aggrePos,
+                        const std::vector<bool> &nodeInterPos,
+                        const std::vector<std::vector<int>> &nodeInPos,
+                        const std::vector<std::vector<int>> &nodeOutPos,
+                        const std::vector<std::vector<int>> &nodeUnPos,
+                        const std::vector<std::vector<int>> &greaterPos,
+                        const std::vector<std::vector<int>> &lessPos,
+                        const std::vector<std::vector<int>> &childKeyPos,
+                        const std::vector<VertexID> &aggreV,
+                        const std::vector<int> &aggreWeight,
+                        EdgeID *inOffset,
+                        VertexID *inNbors,
+                        EdgeID *outOffset,
+                        VertexID *outNbors,
+                        EdgeID *unOffset,
+                        VertexID *unNbors,
+                        VertexID nID,
+                        VertexID *allV) {
+
+    if (pMeta->_thread_id_ets.local() == -1) {
+        pMeta->_thread_id_ets.local() = pMeta->_next_thread_id.fetch_add(1);
+    }
+
+    int thread_id = pMeta->_thread_id_ets.local();
+    VertexID*& tmp = pMeta->_total_tmp[thread_id];
+    HashTable h = pMeta->_total_hash_table[thread_id][nID];
+    ui* startOffset = pMeta->_total_start_offset[thread_id][0];
+    bool* visited = pMeta->_total_visited_vertices[thread_id][0];
+    ui** candidate = pMeta->_total_candidates[thread_id][nID];
+    ui* candCount = pMeta->_total_candidates_cnt[thread_id][nID];
+    ui* pos = pMeta->_total_parallel_node_pos[thread_id];
+
+    ui mappingSize = 0;
+    ui* patternV = pMeta->_patternV[thread_id][0];
+    ui* dataV = pMeta->_dataV[thread_id][0];
+    ui *keyPos = nullptr;
+    ui keyPosSize = 0;
+    ui sizeBound = 0;
+
+    pos[mappingSize] = start;
+    candCount[mappingSize] = end;
+    candidate[mappingSize] = allV;
+
+    while (depth >= 0) {
+        while (pos[mappingSize] < candCount[mappingSize]) {
+            VertexID v = candidate[mappingSize][pos[mappingSize]];
+            ++pos[mappingSize];
+            if (visited[v]) continue;
+            // inside a tree node, we are computing the iso-match, so we need to check if the vertex is visited
+            visited[v] = true;
+            patternV[mappingSize] = tau.nodeOrder[mappingSize];
+            dataV[mappingSize] = v;
+
+            if (depth == tau.localOrder.size() - 1) {
+                Count cnt = 1;
+                // multiply count in children
+                for (int j = 0; j < child.size(); ++j) {
+                    VertexID cID = child[j];
+                    cnt *= H[cID][dataV[childKeyPos[j][0]]];
+                }
+                if (isRoot) {
+                    if (orbitType == 0) h[0] += cnt * aggreWeight[0];
+                    else if (orbitType == 1) {
+                        for (int j = 0; j < aggreV.size(); ++j) {
+                            VertexID key = dataV[aggrePos[j]];
+                            h[key] += cnt * aggreWeight[j];
+                        }
+                    }
+                }
+                else {
+                    h[dataV[aggrePos[0]]] += cnt;
+                    if (keyPosSize < sizeBound) {
+                        keyPos[keyPosSize] = dataV[aggrePos[0]];
+                        ++keyPosSize;
+                    }
+                }
+                visited[dataV[mappingSize]] = false;
+            }
+            else {
+                ++mappingSize;
+                ++depth;
+                pos[mappingSize] = 0;
+                if (!nodeInterPos[mappingSize]) {
+                    if (!nodeOutPos[mappingSize].empty()) {
+                        VertexID w = dataV[nodeOutPos[mappingSize][0]];
+                        startOffset[mappingSize] = outOffset[w];
+                        candidate[mappingSize] = outNbors + outOffset[w];
+                        candCount[mappingSize] = outOffset[w + 1] - outOffset[w];
+                    }
+                    else if (!nodeInPos[mappingSize].empty()){
+                        VertexID w = dataV[nodeInPos[mappingSize][0]];
+                        startOffset[mappingSize] = inOffset[w];
+                        candidate[mappingSize] = inNbors + inOffset[w];
+                        candCount[mappingSize] = inOffset[w + 1] - inOffset[w];
+                    }
+                    else {
+                        // why not use dataV[mappingSize - 1] here?
+                        VertexID w = dataV[nodeUnPos[mappingSize][0]];
+                        startOffset[mappingSize] = unOffset[w];
+                        candidate[mappingSize] = unNbors + unOffset[w];
+                        candCount[mappingSize] = unOffset[w + 1] - unOffset[w];
+                    }
+                }
+                else {
+                    generateCandidate(din, dout, dun, dataV, mappingSize, nodeInPos[mappingSize],
+                                      nodeOutPos[mappingSize], nodeUnPos[mappingSize], candidate, candCount, tmp);
+                }
+                // apply the symmetry breaking rules
+                if (!greaterPos[mappingSize].empty()) {
+                    ui maxTarget = dataV[greaterPos[mappingSize][0]];
+                    for (int i = 1; i < greaterPos[mappingSize].size(); ++i) {
+                        if (dataV[greaterPos[mappingSize][i]] > maxTarget)
+                            maxTarget = dataV[greaterPos[mappingSize][i]];
+                    }
+                    pos[mappingSize] = firstPosGreaterThan(candidate[mappingSize], 0, candCount[mappingSize], maxTarget);
+                }
+                if (!lessPos[mappingSize].empty()) {
+                    ui minTarget = dataV[lessPos[mappingSize][0]];
+                    for (int i = 1; i < lessPos[mappingSize].size(); ++i) {
+                        if (dataV[lessPos[mappingSize][i]] < minTarget)
+                            minTarget = dataV[lessPos[mappingSize][i]];
+                    }
+                    candCount[mappingSize] = firstPosGreaterThan(candidate[mappingSize], 0, candCount[mappingSize], minTarget);
+                }
+            }
+        }
+        --depth;
+        if (depth >= 0) {
+            --mappingSize;
+            visited[dataV[mappingSize]] = false;
+        }
+    }
+}
+
+void PexecuteNode(
+        VertexID nID,
+        const Tree &t,
+        const std::vector<VertexID> &child,
+        HashTable *H,
+        const DataGraph &din,
+        const DataGraph &dout,
+        const DataGraph &dun,
+        const Pattern &p,
+        bool isRoot,
+        EdgeID *outID,
+        EdgeID *unID,
+        EdgeID *reverseID,
+        EdgeID *startOffset,
+        VertexID *patternV,
+        VertexID *dataV,
+        int mappingSize,
+        bool *visited,
+        ui *pos,
+        ui *keyPos,
+        ui &keyPosSize,
+        ui sizeBound,
+        VertexID *&tmp,
+        VertexID *allV,
+        ParallelProcessingMeta *pMeta
+) {
+    int orbitType = t.getOrbitType();
+    HashTable h = H[nID];
+    const Node &tau = t.getNode(nID);
+    const std::vector<int> &aggrePos = t.getAggrePos(nID);
+    const std::vector<bool> &nodeInterPos = t.getNodeInterPos(nID);
+    const std::vector<std::vector<int>> &nodeInPos = t.getNodeInPos(nID);
+    const std::vector<std::vector<int>> &nodeOutPos = t.getNodeOutPos(nID);
+    const std::vector<std::vector<int>> &nodeUnPos = t.getNodeUnPos(nID);
+    const std::vector<std::vector<int>> &greaterPos = t.getNodeGreaterPos(nID);
+    const std::vector<std::vector<int>> &lessPos = t.getNodeLessPos(nID);
+    const std::vector<std::vector<int>> &childKeyPos = t.getChildKeyPos(nID);
+    const std::vector<VertexID> &aggreV = t.getAggreV();
+    const std::vector<int> &aggreWeight = t.getAggreWeight();
+    EdgeID *inOffset = din.getOffsets();
+    VertexID *inNbors = din.getNbors();
+    EdgeID *outOffset = dout.getOffsets();
+    VertexID *outNbors = dout.getNbors();
+    EdgeID *unOffset = dun.getOffsets();
+    VertexID *unNbors = dun.getNbors();
+
+    ui n = din.getNumVertices();
+
+    tbb::task_group taskGroup;
+    int depth = 0;
+    // ui* tmpArray = new VertexID[MAX_PATTERN_SIZE];
+    for (ui i = 0; i < n; i += pMeta->_node_partition_size) {
+        ui start = i;
+        ui end = std::min(i + pMeta->_node_partition_size, n);
+        taskGroup.run([pMeta, start, end, depth, &din, &dout, &dun, &child, isRoot, H, orbitType, &tau, &aggrePos, 
+                    &nodeInterPos, &nodeInPos, &nodeOutPos, &nodeUnPos, &greaterPos, &lessPos, &childKeyPos,
+                    &aggreV, &aggreWeight, inOffset, inNbors, outOffset, outNbors, unOffset, unNbors, nID, allV]() {
+            parallelNodeWorker(pMeta, start, end, depth, din, dout, dun, child, isRoot, H, orbitType, tau, aggrePos, 
+                    nodeInterPos, nodeInPos, nodeOutPos, nodeUnPos, greaterPos, lessPos, childKeyPos, aggreV, 
+                    aggreWeight, inOffset, inNbors, outOffset, outNbors, unOffset, unNbors, nID, allV);
+        });
+    }
+    taskGroup.wait();
+    // delete [] tmpArray;
+    
+    //combine the results from all threads
+    for (ui i = 0; i < pMeta->_num_threads; i++) {
+        HashTable thread_local_H = pMeta->_total_hash_table[i][nID];
+        for (ui j = 0; j < dun.getNumEdges(); j++) {
+            h[j] += thread_local_H[j];
+        }
+    }
+
+    for (ui i = 0; i < pMeta->_num_threads; i++) {
+        HashTable thread_local_H = pMeta->_total_hash_table[i][nID];
+        std::copy(h, h + dun.getNumEdges(), thread_local_H);
     }
 }
 
@@ -804,6 +1028,284 @@ void executeNodeT(
             --mappingSize;
             visited[dataV[mappingSize]] = false;
         }
+    }
+}
+
+void parallelNodeEdgeWorker(ParallelProcessingMeta *pMeta,
+                            ui start,
+                            ui end,
+                            int depth,
+                            VertexID nID,
+                            const std::vector<VertexID> &child,
+                            HashTable *H,
+                            const DataGraph &din,
+                            const DataGraph &dout,
+                            const DataGraph &dun,
+                            bool isRoot,
+                            EdgeID *outID,
+                            EdgeID *unID,
+                            EdgeID *reverseID,
+                            int orbitType,
+                            const Node &tau,
+                            const std::vector<int> &aggrePos,
+                            const std::vector<bool> &nodeInterPos,
+                            const std::vector<std::vector<int>> &nodeInPos,
+                            const std::vector<std::vector<int>> &nodeOutPos,
+                            const std::vector<std::vector<int>> &nodeUnPos,
+                            const std::vector<std::vector<int>> &greaterPos,
+                            const std::vector<std::vector<int>> &lessPos,
+                            const std::vector<std::vector<int>> &childKeyPos,
+                            const std::vector<VertexID> &aggreV,
+                            const std::vector<int> &aggreWeight,
+                            const std::vector<std::vector<int>> &posChildEdge,
+                            const std::vector<std::vector<int>> &posAggreEdge,
+                            const std::vector<int> &childEdgeType,
+                            const std::vector<int> &aggreEdgeType,
+                            EdgeID *inOffset,
+                            VertexID *inNbors,
+                            EdgeID *outOffset,
+                            VertexID *outNbors,
+                            EdgeID *unOffset,
+                            VertexID *unNbors,
+                            VertexID *allV) {
+    if (pMeta->_thread_id_ets.local() == -1) {
+        pMeta->_thread_id_ets.local() = pMeta->_next_thread_id.fetch_add(1);
+    }
+
+    int thread_id = pMeta->_thread_id_ets.local();
+    VertexID*& tmp = pMeta->_total_tmp[thread_id];
+    HashTable h = pMeta->_total_hash_table[thread_id][nID];
+    ui* startOffset = pMeta->_total_start_offset[thread_id][0];
+    bool* visited = pMeta->_total_visited_vertices[thread_id][0];
+    ui** candidate = pMeta->_total_candidates[thread_id][nID];
+    ui* candCount = pMeta->_total_candidates_cnt[thread_id][nID];
+    ui* pos = pMeta->_total_parallel_node_pos[thread_id];
+
+    ui mappingSize = 0;
+    ui* patternV = pMeta->_patternV[thread_id][0];
+    ui* dataV = pMeta->_dataV[thread_id][0];
+    ui *keyPos = nullptr;
+    ui keyPosSize = 0;
+    ui sizeBound = 0;
+
+    pos[mappingSize] = start;
+    candCount[mappingSize] = end;
+    candidate[mappingSize] = allV;
+
+    std::vector<EdgeID> childKey(child.size());
+    std::vector<EdgeID> aggreKey;
+    if (isRoot && orbitType == 2) aggreKey = std::vector<EdgeID>(aggreWeight.size());
+    else if (tau.keySize == 2) aggreKey.push_back(0);
+
+    while (depth >= 0) {
+        while (pos[mappingSize] < candCount[mappingSize]) {
+            VertexID v = candidate[mappingSize][pos[mappingSize]];
+            ++pos[mappingSize];
+            if (visited[v]) continue;
+            visited[v] = true;
+            patternV[mappingSize] = tau.nodeOrder[mappingSize];
+            dataV[mappingSize] = v;
+            // for child edge keys, compute the key value
+            for (int j: posChildEdge[mappingSize]) {
+                childKey[j] = computeEdgeKey(din, dout, dun, outID, unID, reverseID, startOffset, mappingSize, pos,
+                                             childEdgeType[j], dataV[childKeyPos[j][0]], dataV[childKeyPos[j][1]]);
+            }
+            // for aggregation edge keys, compute the key value
+            for (int j: posAggreEdge[mappingSize]) {
+                aggreKey[j] = computeEdgeKey(din, dout, dun, outID, unID, reverseID, startOffset, mappingSize, pos,
+                                             aggreEdgeType[j], dataV[aggrePos[2 * j]], dataV[aggrePos[2 * j + 1]]);
+            }
+            if (depth == tau.localOrder.size() - 1) {
+                Count cnt = 1;
+                // multiply count in children
+                for (int j = 0; j < child.size(); ++j) {
+                    VertexID cID = child[j];
+                    if (childKeyPos[j].size() == 1) {
+                        cnt *= H[cID][dataV[childKeyPos[j][0]]];
+                    }
+                    else {
+                        cnt *= H[cID][childKey[j]];
+                    }
+                }
+                if (isRoot) {
+                    if (orbitType == 0) h[0] += cnt * aggreWeight[0];
+                    else if (orbitType == 1) {
+                        for (int j = 0; j < aggreV.size(); ++j) {
+                            VertexID key = dataV[aggrePos[j]];
+                            h[key] += cnt * aggreWeight[j];
+                        }
+                    }
+                    else {
+                        for (int j = 0; j < aggreKey.size(); ++j) {
+                            h[aggreKey[j]] += cnt * aggreWeight[j];
+                        }
+                    }
+                }
+                else {
+                    if (tau.keySize < 2) {
+                        h[dataV[aggrePos[0]]] += cnt;
+                        if (keyPosSize < sizeBound) {
+                            keyPos[keyPosSize] = dataV[aggrePos[0]];
+                            ++keyPosSize;
+                        }
+                    }
+                    else {
+                        EdgeID e = aggreKey[0];
+                        h[e] += cnt;
+                        if (keyPosSize < sizeBound) {
+                            keyPos[keyPosSize] = e;
+                            ++keyPosSize;
+                        }
+                    }
+                }
+                visited[dataV[mappingSize]] = false;
+            }
+            else {
+                ++mappingSize;
+                ++depth;
+                pos[mappingSize] = 0;
+                if (!nodeInterPos[mappingSize]) {
+                    if (!nodeOutPos[mappingSize].empty()) {
+                        VertexID w = dataV[nodeOutPos[mappingSize][0]];
+                        startOffset[mappingSize] = outOffset[w];
+                        candidate[mappingSize] = outNbors + outOffset[w];
+                        candCount[mappingSize] = outOffset[w + 1] - outOffset[w];
+                    }
+                    else if (!nodeInPos[mappingSize].empty()){
+                        VertexID w = dataV[nodeInPos[mappingSize][0]];
+                        startOffset[mappingSize] = inOffset[w];
+                        candidate[mappingSize] = inNbors + inOffset[w];
+                        candCount[mappingSize] = inOffset[w + 1] - inOffset[w];
+                    }
+                    else {
+                        VertexID w = dataV[nodeUnPos[mappingSize][0]];
+                        startOffset[mappingSize] = unOffset[w];
+                        candidate[mappingSize] = unNbors + unOffset[w];
+                        candCount[mappingSize] = unOffset[w + 1] - unOffset[w];
+                    }
+                }
+                else {
+                    generateCandidate(din, dout, dun, dataV, mappingSize, nodeInPos[mappingSize],
+                                      nodeOutPos[mappingSize], nodeUnPos[mappingSize], candidate, candCount, tmp);
+                }
+                // apply the symmetry breaking rules
+                if (!greaterPos[mappingSize].empty()) {
+                    ui maxTarget = dataV[greaterPos[mappingSize][0]];
+                    for (int i = 1; i < greaterPos[mappingSize].size(); ++i) {
+                        if (dataV[greaterPos[mappingSize][i]] > maxTarget)
+                            maxTarget = dataV[greaterPos[mappingSize][i]];
+                    }
+                    pos[mappingSize] = firstPosGreaterThan(candidate[mappingSize], 0, candCount[mappingSize], maxTarget);
+                }
+                if (!lessPos[mappingSize].empty()) {
+                    ui minTarget = dataV[lessPos[mappingSize][0]];
+                    for (int i = 1; i < lessPos[mappingSize].size(); ++i) {
+                        if (dataV[lessPos[mappingSize][i]] < minTarget)
+                            minTarget = dataV[lessPos[mappingSize][i]];
+                    }
+                    candCount[mappingSize] = firstPosGreaterThan(candidate[mappingSize], 0, candCount[mappingSize], minTarget);
+                }
+            }
+        }
+        --depth;
+        if (depth >= 0) {
+            --mappingSize;
+            visited[dataV[mappingSize]] = false;
+        }
+    }
+}
+
+void PexecuteNodeEdgeKey(
+        VertexID nID,
+        const Tree &t,
+        const std::vector<VertexID> &child,
+        HashTable *H,
+        const DataGraph &din,
+        const DataGraph &dout,
+        const DataGraph &dun,
+        const Pattern &p,
+        bool isRoot,
+        EdgeID *outID,
+        EdgeID *unID,
+        EdgeID *reverseID,
+        EdgeID *startOffset,
+        VertexID *patternV,
+        VertexID *dataV,
+        int mappingSize,
+        bool *visited,
+        ui *pos,
+        ui *keyPos,
+        ui &keyPosSize,
+        ui sizeBound,
+        VertexID *&tmp,
+        VertexID *allV,
+        ParallelProcessingMeta *pMeta
+) {
+    int orbitType = t.getOrbitType();
+    HashTable h = H[nID];
+    const Node &tau = t.getNode(nID);
+    const std::vector<int> &aggrePos = t.getAggrePos(nID);
+    const std::vector<bool> &nodeInterPos = t.getNodeInterPos(nID);
+    const std::vector<std::vector<int>> &nodeInPos = t.getNodeInPos(nID);
+    const std::vector<std::vector<int>> &nodeOutPos = t.getNodeOutPos(nID);
+    const std::vector<std::vector<int>> &nodeUnPos = t.getNodeUnPos(nID);
+    const std::vector<std::vector<int>> &greaterPos = t.getNodeGreaterPos(nID);
+    const std::vector<std::vector<int>> &lessPos = t.getNodeLessPos(nID);
+    const std::vector<std::vector<int>> &childKeyPos = t.getChildKeyPos(nID);
+    const std::vector<VertexID> &aggreV = t.getAggreV();
+    const std::vector<int> &aggreWeight = t.getAggreWeight();
+    const std::vector<std::vector<int>> &posChildEdge = t.getPosChildEdge(nID);
+    const std::vector<std::vector<int>> &posAggreEdge = t.getPosAggreEdge(nID);
+    const std::vector<int> &childEdgeType = t.getChildEdgeType(nID);
+    const std::vector<int> &aggreEdgeType = t.getAggreEdgeType(nID);
+    EdgeID *inOffset = din.getOffsets();
+    VertexID *inNbors = din.getNbors();
+    EdgeID *outOffset = dout.getOffsets();
+    VertexID *outNbors = dout.getNbors();
+    EdgeID *unOffset = dun.getOffsets();
+    VertexID *unNbors = dun.getNbors();
+
+    std::vector<EdgeID> childKey(child.size());
+    std::vector<EdgeID> aggreKey;
+    if (isRoot && orbitType == 2) aggreKey = std::vector<EdgeID>(aggreWeight.size());
+    else if (tau.keySize == 2) aggreKey.push_back(0);
+
+    ui n = din.getNumVertices();
+
+    tbb::task_group taskGroup;
+    int depth = 0;
+    // ui* tmpArray = new VertexID[MAX_PATTERN_SIZE];
+    for (ui i = 0; i < n; i += pMeta->_node_partition_size) {
+        ui start = i;
+        ui end = std::min(i + pMeta->_node_partition_size, n);
+        taskGroup.run([pMeta, start, end, depth, nID, &child, H, &din, &dout, &dun, isRoot,
+                       outID, unID, reverseID, orbitType, &tau, &aggrePos, &nodeInterPos,
+                       &nodeInPos, &nodeOutPos, &nodeUnPos, &greaterPos, &lessPos,
+                       &childKeyPos, &aggreV, &aggreWeight, &posChildEdge,
+                       &posAggreEdge, &childEdgeType, &aggreEdgeType, inOffset,
+                       inNbors, outOffset, outNbors, unOffset, unNbors, allV]() {
+            parallelNodeEdgeWorker(pMeta, start, end, depth, nID, child, H, din, dout, dun, isRoot,
+                                   outID, unID, reverseID, orbitType, tau, aggrePos,
+                                   nodeInterPos, nodeInPos, nodeOutPos, nodeUnPos,
+                                   greaterPos, lessPos, childKeyPos, aggreV, aggreWeight,
+                                   posChildEdge, posAggreEdge, childEdgeType, aggreEdgeType,
+                                   inOffset, inNbors, outOffset, outNbors, unOffset, unNbors, allV);
+        });
+    }
+    taskGroup.wait();
+    // delete [] tmpArray;
+    
+    //combine the results from all threads
+    for (ui i = 0; i < pMeta->_num_threads; i++) {
+        HashTable thread_local_H = pMeta->_total_hash_table[i][nID];
+        for (ui j = 0; j < dun.getNumEdges(); j++) {
+            h[j] += thread_local_H[j];
+        }
+    }
+
+    for (ui i = 0; i < pMeta->_num_threads; i++) {
+        HashTable thread_local_H = pMeta->_total_hash_table[i][nID];
+        std::copy(h, h + dun.getNumEdges(), thread_local_H);
     }
 }
 
@@ -1378,6 +1880,208 @@ void executePartition(
         bool *visited,
         ui *pos,
         VertexID *&tmp,
+        VertexID *allV,
+        ParallelProcessingMeta* pMeta
+) {
+    const std::vector<std::vector<VertexID>> &globalOrder = t.getGlobalOrder();
+    const std::vector<std::vector<std::vector<VertexID>>> &nodesAtStep = t.getNodesAtStep();
+    const std::vector<VertexID> &partitionOrder = globalOrder[pID];
+    const std::vector<std::vector<VertexID>> &child = t.getChild();
+    const std::vector<VertexID> &postOrder = t.getPostOrder();
+    const std::vector<int> &partitionPos = t.getPartitionPos();
+    const std::vector<std::vector<int>> &partitionInPos = t.getPartitionInPos(pID);
+    const std::vector<std::vector<int>> &partitionOutPos = t.getPartitionOutPos(pID);
+    const std::vector<std::vector<int>> &partitionUnPos = t.getPartitionUnPos(pID);
+    const std::vector<bool> &partitionInterPos = t.getPartitionInterPos(pID);
+    const std::vector<std::vector<int>> &greaterPos = t.getPartitionGreaterPos(pID);
+    const std::vector<std::vector<int>> &lessPos = t.getPartitionLessPos(pID);
+    const std::vector<bool> &partitionCandPos = t.getPartitionCandPos(pID);
+    const std::vector<std::pair<int, int>> &partitionTriPos = t.getPartitionTriPos(pID);
+    const std::vector<int> &triEdgeType = t.getPartitionEdgeType(pID);
+    const std::vector<int> &triEndType = t.getPartitionEndType(pID);
+    EdgeID *inOffset = din.getOffsets();
+    VertexID *inNbors = din.getNbors();
+    EdgeID *outOffset = dout.getOffsets();
+    VertexID *outNbors = dout.getNbors();
+    EdgeID *unOffset = dun.getOffsets();
+    EdgeID *unNbors = dun.getNbors();
+    int startPos;
+    if (pID == 0) startPos = 0;
+    else startPos = partitionPos[pID - 1] + 1;
+    int endPos = partitionPos[pID] + 1;
+    bool isRoot = endPos == postOrder.size();
+    ui n = dun.getNumVertices(), m = dun.getNumEdges();
+    int mappingSize = 0;
+    const std::vector<std::vector<VertexID>> &allChild = t.getChild();
+    ui argument = 0;
+    if (partitionOrder.empty()) {
+# ifdef COLLECT_PARALLEL_STATISTICS
+        auto start = std::chrono::high_resolution_clock::now();
+# endif
+        for (int i = startPos; i < endPos; ++i) {
+            VertexID nID = postOrder[i];
+            isRoot = endPos == postOrder.size() && i == endPos - 1;
+            if (!t.nodeEdgeKey(nID) && !useTriangle) {
+                PexecuteNode(nID, t, allChild[nID], H, din, dout, dun, p, isRoot, outID, unID, reverseID,
+                            startOffset, patternV, dataV, 0, visited, pos, nullptr, argument, argument, tmp, allV, pMeta);
+            }
+            else if (!t.nodeEdgeKey(nID) && useTriangle) {
+                executeNodeT(nID, t, allChild[nID], candidate[nID], candCount[nID], H, din, dout, dun, tri, p, isRoot, outID, unID, reverseID,
+                             startOffset, patternV, dataV, 0, visited, pos, nullptr, argument, argument, tmp, allV);
+
+            }
+            else if (t.nodeEdgeKey(nID) && !useTriangle) {
+                PexecuteNodeEdgeKey(nID, t, allChild[nID], H, din, dout, dun, p, isRoot, outID, unID, reverseID,
+                                   startOffset, patternV, dataV, 0, visited, pos, nullptr, argument, argument, tmp, allV, pMeta);
+            }
+            else {
+                executeNodeEdgeKeyT(nID, t, allChild[nID], candidate[nID], candCount[nID], H, din, dout, dun, tri, p, isRoot, outID, unID, reverseID,
+                                    startOffset, patternV, dataV, 0, visited, pos, nullptr, argument, argument, tmp, allV);
+            }
+        }
+# ifdef COLLECT_PARALLEL_STATISTICS
+        auto end = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+        std::cout << "Empty Partition " << pID << " takes " << duration.count() << " milliseconds" << std::endl;
+# endif
+        return;
+    }
+    // let candidate points to a memory whose length is the number of vertices in the data graph
+    VertexID **partitionCandidate = new VertexID *[partitionOrder.size()];
+    for (int i = 0; i < partitionOrder.size(); ++i) {
+        if (partitionCandPos[i])
+            partitionCandidate[i] = new VertexID[dout.getNumVertices()];
+    }
+    ui *partitionCandCount = new ui[partitionOrder.size()];
+    // for each node, store the keys whose values are not 0
+    // those keys will be cleared to 0 before the next visit of this node begins
+    // If the used entries is larger m / 8. we just clear the whole hashtable
+    ui **keyPos = new ui *[t.getNumNodes()];
+    for (int i = startPos; i < endPos; ++i) {
+        VertexID nID = postOrder[i];
+        if (t.getNode(nID).keySize == 0)
+            keyPos[nID] = new ui[1];
+        else if (t.getNode(nID).keySize == 1)
+            keyPos[nID] = new ui[n / 8 + 1];
+        else if (t.getNode(nID).keySize == 2)
+            keyPos[nID] = new ui[m / 8 + 1];
+    }
+    ui *keyPosSize = new ui[t.getNumNodes()];
+    memset(keyPosSize, 0, sizeof(ui) * (t.getNumNodes()));
+    partitionCandidate[0] = allV;
+    partitionCandCount[0] = n;
+    pos[0] = 0;
+    // depth iterate through the pattern vertices in the partition order
+    pMeta->setPartitionCandidates(t, partitionOrder, partitionCandPos, dout, postOrder, startPos, endPos, n, m);
+    int depth = 0;
+# ifdef COLLECT_PARALLEL_STATISTICS
+    auto start = std::chrono::high_resolution_clock::now();
+# endif
+    tbb::task_group taskGroup;
+    ExecutePartitionWorker worker(
+        pMeta,
+        t,
+        globalOrder,
+        nodesAtStep,
+        partitionOrder,
+        child,
+        postOrder,
+        partitionPos,
+        partitionInPos,
+        partitionOutPos,
+        partitionUnPos,
+        partitionInterPos,
+        greaterPos,
+        lessPos,
+        partitionCandPos,
+        partitionTriPos,
+        triEdgeType,
+        triEndType,
+        inOffset,
+        inNbors,
+        outOffset,
+        outNbors,
+        unOffset,
+        unNbors,
+        din,
+        dout,
+        dun,
+        useTriangle,
+        tri,
+        outID,
+        unID,
+        reverseID,
+        pID,
+        p,
+        allChild,
+        endPos,
+        isRoot,
+        allV
+    );
+    // ui* tmpArray = new VertexID[MAX_PATTERN_SIZE];
+    for (ui i = 0; i < partitionCandCount[0]; i+=pMeta->_prefix_partition_size) {
+        ui start = i;
+        ui end = std::min(i + pMeta->_prefix_partition_size, partitionCandCount[0]);  // Ensure we don't go past the end
+        taskGroup.run([&worker, start, end, depth]() {
+            worker(start, end, depth);
+        });
+    }
+    taskGroup.wait();
+    // delete [] tmpArray;
+    pMeta->clearPartitionCandidates(partitionOrder, partitionCandPos, postOrder, startPos, endPos);
+
+    // combine the results from all threads
+    ui rootID = postOrder[partitionPos[pID]];
+    for (ui i = 0; i < pMeta->_num_threads; i++) {
+        HashTable thread_local_H = pMeta->_total_hash_table[i][rootID];
+        for (ui j = 0; j < m; j++) {
+            H[rootID][j] += thread_local_H[j];
+        }
+    }
+    for (ui i = 0; i < pMeta->_num_threads; i++) {
+        HashTable thread_local_H = pMeta->_total_hash_table[i][rootID];
+        std::copy(H[rootID], H[rootID] + dun.getNumEdges(), thread_local_H);
+    }
+# ifdef COLLECT_PARALLEL_STATISTICS
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    std::cout << "Prefix Partition " << pID << " takes " << duration.count() << " milliseconds" << std::endl;
+# endif
+    for (int j = 0; j < partitionOrder.size(); ++j) {
+        if (partitionCandPos[j])
+            delete[] partitionCandidate[j];
+    }
+    delete[] partitionCandidate;
+    delete[] partitionCandCount;
+    for (int j = startPos; j < endPos; ++j) {
+        VertexID nID = postOrder[j];
+        delete[] keyPos[postOrder[j]];
+    }
+    delete[] keyPos;
+    delete[] keyPosSize;
+}
+
+void executePartition(
+        VertexID pID,
+        const Tree &t,
+        VertexID ***candidate,
+        ui **candCount,
+        HashTable *H,
+        const DataGraph &din,
+        const DataGraph &dout,
+        const DataGraph &dun,
+        bool useTriangle,
+        const Triangle &tri,
+        const Pattern &p,
+        EdgeID *outID,
+        EdgeID *unID,
+        EdgeID *reverseID,
+        EdgeID *startOffset,
+        VertexID *patternV,
+        VertexID *dataV,
+        bool *visited,
+        ui *pos,
+        VertexID *&tmp,
         VertexID *allV
 ) {
     const std::vector<std::vector<VertexID>> &globalOrder = t.getGlobalOrder();
@@ -1405,13 +2109,16 @@ void executePartition(
     int startPos;
     if (pID == 0) startPos = 0;
     else startPos = partitionPos[pID - 1] + 1;
-    int endPos = partitionPos[pID] + 1;         // exclude the end position [startPos, endPos), the partition starts at postOrder[startPos], end at postOrder[endPos - 1]
+    int endPos = partitionPos[pID] + 1;
     bool isRoot = endPos == postOrder.size();
     ui n = dun.getNumVertices(), m = dun.getNumEdges();
     int mappingSize = 0;
     const std::vector<std::vector<VertexID>> &allChild = t.getChild();
     ui argument = 0;
     if (partitionOrder.empty()) {
+# ifdef COLLECT_PARALLEL_STATISTICS
+        auto start = std::chrono::high_resolution_clock::now();
+# endif
         for (int i = startPos; i < endPos; ++i) {
             VertexID nID = postOrder[i];
             isRoot = endPos == postOrder.size() && i == endPos - 1;
@@ -1433,6 +2140,11 @@ void executePartition(
                                     startOffset, patternV, dataV, 0, visited, pos, nullptr, argument, argument, tmp, allV);
             }
         }
+# ifdef COLLECT_PARALLEL_STATISTICS
+        auto end = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+        std::cout << "Empty Partition " << pID << " takes " << duration.count() << " milliseconds" << std::endl;
+# endif
         return;
     }
     // let candidate points to a memory whose length is the number of vertices in the data graph
@@ -1443,6 +2155,8 @@ void executePartition(
     }
     ui *partitionCandCount = new ui[partitionOrder.size()];
     // for each node, store the keys whose values are not 0
+    // those keys will be cleared to 0 before the next visit of this node begins
+    // If the used entries is larger m / 8. we just clear the whole hashtable
     ui **keyPos = new ui *[t.getNumNodes()];
     for (int i = startPos; i < endPos; ++i) {
         VertexID nID = postOrder[i];
@@ -1453,7 +2167,6 @@ void executePartition(
         else if (t.getNode(nID).keySize == 2)
             keyPos[nID] = new ui[m / 8 + 1];
     }
-
     ui *keyPosSize = new ui[t.getNumNodes()];
     memset(keyPosSize, 0, sizeof(ui) * (t.getNumNodes()));
     partitionCandidate[0] = allV;
@@ -1461,6 +2174,9 @@ void executePartition(
     pos[0] = 0;
     // depth iterate through the pattern vertices in the partition order
     int depth = 0;
+# ifdef COLLECT_PARALLEL_STATISTICS
+    auto start = std::chrono::high_resolution_clock::now();
+# endif
     while (depth >= 0) {
         while (pos[depth] < partitionCandCount[depth]) {
             VertexID v = partitionCandidate[depth][pos[depth]];
@@ -1536,6 +2252,7 @@ void executePartition(
                     }
                 }
             }
+            // print_hash_table(H, dun.getNumEdges(), t.getNumNodes());
             if (depth == partitionOrder.size() - 1) {
                 visited[dataV[mappingSize]] = false;
             }
@@ -1616,6 +2333,11 @@ void executePartition(
         if (depth >= 0)
             visited[dataV[depth]] = false;
     }
+# ifdef COLLECT_PARALLEL_STATISTICS
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    std::cout << "Prefix Partition " << pID << " takes " << duration.count() << " milliseconds" << std::endl;
+# endif
     for (int j = 0; j < partitionOrder.size(); ++j) {
         if (partitionCandPos[j])
             delete[] partitionCandidate[j];
@@ -1628,6 +2350,77 @@ void executePartition(
     }
     delete[] keyPos;
     delete[] keyPosSize;
+}
+
+void executeTree (
+        const Tree &t,
+        const DataGraph &din,
+        const DataGraph &dout,
+        const DataGraph &dun,
+        bool useTriangle,
+        const Triangle &tri,
+        const Pattern &p,
+        HashTable *H,
+        EdgeID *outID,
+        EdgeID *unID,
+        EdgeID *reverseID,
+        EdgeID *startOffset,
+        VertexID *patternV,
+        VertexID *dataV,
+        bool *visited,
+        ui *pos,
+        VertexID *&tmp,
+        VertexID *allV,
+        ParallelProcessingMeta* pMeta
+) {
+    int numNodes = (int)t.getNumNodes();
+    // VertexID ***candidate = new VertexID **[numNodes];
+    // ui **candCount = new ui *[numNodes];
+    // for (VertexID nID = 0; nID < numNodes; ++nID) {
+    //     const Node &tau = t.getNode(nID);
+    //     int partOrderLength = int(tau.nodeOrder.size() - tau.localOrder.size());
+    //     candCount[nID] = new ui[tau.nodeOrder.size()];
+    //     candidate[nID] = new VertexID *[tau.nodeOrder.size()];
+    //     const std::vector<bool> &nodeCandPos = t.getNodeCandPos(nID);
+    //     for (int i = partOrderLength; i < nodeCandPos.size(); ++i) {
+    //         if (nodeCandPos[i])
+    //             candidate[nID][i] = new VertexID[dout.getNumVertices()];
+    //     }
+    // }
+    VertexID ***candidate = nullptr;
+    ui **candCount = nullptr;
+    pMeta->setCandidates(t, dout);
+
+    // (What is a partition?)for each partition, calls executePartition to build a full hash table
+    // I guess a partition is a group of nodes that share a common prefix
+    for (VertexID pID = 0; pID < t.getPartitionPos().size(); ++pID) {
+# ifdef COLLECT_PARALLEL_STATISTICS
+        std::cout << "Prefix Size: " << t.getPartitionOrder(pID).size() << std::endl;
+# endif
+        executePartition(pID, t, candidate, candCount, H, din, dout, dun, useTriangle, tri,
+                         p, outID, unID, reverseID, startOffset, patternV, dataV, visited, pos, tmp, allV, pMeta);
+        // std::cout << "Total ---" << std::endl;
+        // print_hash_table(H, dun.getNumEdges(), t.getNumNodes());
+        // std::cout << "Thread 0 ---" << std::endl;
+        // print_hash_table(pMeta->_total_hash_table[0], dun.getNumEdges(), t.getNumNodes());
+        // std::cout << "Thread 1 ---" << std::endl;
+        // print_hash_table(pMeta->_total_hash_table[1], dun.getNumEdges(), t.getNumNodes());
+    }
+    pMeta->clearCandidates(t);
+    // all code below is just about freeing the memory, the tiso-count of this tree is already stored in H
+    // for (VertexID nID = 0; nID < numNodes; ++nID) {
+    //     const Node &tau = t.getNode(nID);
+    //     int partOrderLength = int(tau.nodeOrder.size() - tau.localOrder.size());
+    //     const std::vector<bool> &nodeCandPos = t.getNodeCandPos(nID);
+    //     for (int i = partOrderLength; i < nodeCandPos.size(); ++i) {
+    //         if (nodeCandPos[i])
+    //             delete[] candidate[nID][i];
+    //     }
+    //     delete[] candidate[nID];
+    //     delete[] candCount[nID];
+    // }
+    // delete[] candCount;
+    // delete[] candidate;
 }
 
 void executeTree (
@@ -1661,28 +2454,19 @@ void executeTree (
         const std::vector<bool> &nodeCandPos = t.getNodeCandPos(nID);
         for (int i = partOrderLength; i < nodeCandPos.size(); ++i) {
             if (nodeCandPos[i])
-                // when there is only 1 predNeighbor of a patternV, we do not need to compute its candidate
-                // It's candidate is just the neighbors of its predNeighbor
-                // We just point the candidate to the graph._neighbor + graph._offsets[predNeighbor]
                 candidate[nID][i] = new VertexID[dout.getNumVertices()];
         }
     }
 
     // (What is a partition?)for each partition, calls executePartition to build a full hash table
+    // I guess a partition is a group of nodes that share a common prefix
     for (VertexID pID = 0; pID < t.getPartitionPos().size(); ++pID) {
+# ifdef COLLECT_PARALLEL_STATISTICS
+        std::cout << "Prefix Size: " << t.getPartitionOrder(pID).size() << std::endl;
+# endif
         executePartition(pID, t, candidate, candCount, H, din, dout, dun, useTriangle, tri,
                          p, outID, unID, reverseID, startOffset, patternV, dataV, visited, pos, tmp, allV);
-/****** Debug Start *****/
-// print out the hash table
-// std::cout << "Partition " << pID << std::endl;
-// for (int i = 0; i < t.getNumNodes(); i++) {
-//     for (int j = 0; j < dun.getNumEdges() + 1; j++) {
-//         std::cout << H[i][j] << " ";
-//     }
-//     std::cout << std::endl;
-// }
-// std::cout << std::endl;
-/****** Debug End *****/
+        // print_hash_table(H, dun.getNumEdges(), t.getNumNodes());
     }
     // all code below is just about freeing the memory, the tiso-count of this tree is already stored in H
     for (VertexID nID = 0; nID < numNodes; ++nID) {
@@ -1881,6 +2665,287 @@ void multiJoin(
                 }
                 multiJoinWrapper(cID, t, t.getChild()[cID], candidates, candCounts, H, din, dout, dun, false, tri, p, outID, unID,
                                  reverseID, startOffsets, patternVs, dataVs, visits, poses, keyPoses, keyPosSizes, sizeBounds, tmp, allV);
+                for (int j = 0; j < prefixPos[cID].size(); ++j) {
+                    visits[cID][dataVs[cID][j]] = false;
+                }
+            }
+            if (mappingSize == tau.numVertices - 1) {
+#ifdef COLLECT_STATISTICS
+                ++gNumMatch;
+#endif
+                Count cnt = 1;
+                // multiply count in children
+                for (int j = 0; j < child.size(); ++j) {
+                    VertexID cID = child[j];
+                    if (childKeyPos[j].empty()) cnt *= H[cID][0];
+                    else cnt *= H[cID][dataV[childKeyPos[j][0]]];
+                }
+                if (isRoot) {
+                    if (orbitType == 0) h[0] += cnt * aggreWeight[0];
+                    else {
+                        for (int j = 0; j < aggreV.size(); ++j) {
+                            VertexID key = dataV[aggrePos[j]];
+#ifdef COLLECT_STATISTICS
+                            ++gNumUpdate;
+#endif
+                            h[key] += cnt * aggreWeight[j];
+                        }
+                    }
+                }
+                else {
+                    if (tau.keySize == 0) h[0] += cnt;
+                    else {
+#ifdef COLLECT_STATISTICS
+                        ++gNumUpdate;
+#endif
+                        h[dataV[aggrePos[0]]] += cnt;
+                        if (keyPosSize < sizeBound) {
+                            keyPos[keyPosSize] = dataV[aggrePos[0]];
+                            ++keyPosSize;
+                        }
+                    }
+                }
+                visited[dataV[mappingSize]] = false;
+            }
+            else {
+#ifdef COLLECT_STATISTICS
+                ++gNumIntermediate;
+#endif
+                ++mappingSize;
+                pos[mappingSize] = 0;
+                if (!nodeInterPos[mappingSize]) {
+                    if (!nodeOutPos[mappingSize].empty()) {
+                        VertexID w = dataV[nodeOutPos[mappingSize][0]];
+                        startOffset[mappingSize] = outOffset[w];
+                        candidate[mappingSize] = outNbors + outOffset[w];
+                        candCount[mappingSize] = outOffset[w + 1] - outOffset[w];
+                    }
+                    else if (!nodeInPos[mappingSize].empty()){
+                        VertexID w = dataV[nodeInPos[mappingSize][0]];
+                        startOffset[mappingSize] = inOffset[w];
+                        candidate[mappingSize] = inNbors + inOffset[w];
+                        candCount[mappingSize] = inOffset[w + 1] - inOffset[w];
+                    }
+                    else {
+                        VertexID w = dataV[nodeUnPos[mappingSize][0]];
+                        startOffset[mappingSize] = unOffset[w];
+                        candidate[mappingSize] = unNbors + unOffset[w];
+                        candCount[mappingSize] = unOffset[w + 1] - unOffset[w];
+                    }
+                }
+                else {
+                    generateCandidate(din, dout, dun, dataV, mappingSize, nodeInPos[mappingSize],
+                                      nodeOutPos[mappingSize], nodeUnPos[mappingSize], candidate, candCount, tmp);
+                }
+                // apply the symmetry breaking rules
+                if (!greaterPos[mappingSize].empty()) {
+                    ui maxTarget = dataV[greaterPos[mappingSize][0]];
+                    for (int i = 1; i < greaterPos[mappingSize].size(); ++i) {
+                        if (dataV[greaterPos[mappingSize][i]] > maxTarget)
+                            maxTarget = dataV[greaterPos[mappingSize][i]];
+                    }
+                    pos[mappingSize] = firstPosGreaterThan(candidate[mappingSize], 0, candCount[mappingSize], maxTarget);
+                }
+                if (!lessPos[mappingSize].empty()) {
+                    ui minTarget = dataV[lessPos[mappingSize][0]];
+                    for (int i = 1; i < lessPos[mappingSize].size(); ++i) {
+                        if (dataV[lessPos[mappingSize][i]] < minTarget)
+                            minTarget = dataV[lessPos[mappingSize][i]];
+                    }
+                    candCount[mappingSize] = firstPosGreaterThan(candidate[mappingSize], 0, candCount[mappingSize], minTarget);
+                }
+            }
+        }
+        --mappingSize;
+        if (mappingSize >= (int)tau.prefixSize) {
+            visited[dataV[mappingSize]] = false;
+        }
+    }
+}
+
+void multiJoin(
+        VertexID nID,
+        const Tree &t,
+        const std::vector<VertexID> &child,
+        VertexID ***candidates,
+        ui **candCounts,
+        HashTable *H,
+        const DataGraph &din,
+        const DataGraph &dout,
+        const DataGraph &dun,
+        const Triangle &tri,
+        const Pattern &p,
+        EdgeID *outID,
+        EdgeID *unID,
+        EdgeID *reverseID,
+        EdgeID **startOffsets,
+        VertexID **patternVs,
+        VertexID **dataVs,
+        bool **visits,
+        ui **poses,
+        ui **keyPoses,
+        ui *keyPosSizes,
+        ui *sizeBounds,
+        VertexID *&tmp,
+        VertexID *allV,
+        ui start,
+        ui end
+) {
+    int orbitType = t.getOrbitType();
+    HashTable h = H[nID];
+    const Node &tau = t.getNode(nID);
+    const std::vector<int> &aggrePos = t.getAggrePos(nID);
+    const std::vector<bool> &nodeInterPos = t.getNodeInterPos(nID);
+    const std::vector<bool> &nodeCandPos = t.getNodeCandPos(nID);
+    const std::vector<std::vector<int>> &nodeInPos = t.getNodeInPos(nID);
+    const std::vector<std::vector<int>> &nodeOutPos = t.getNodeOutPos(nID);
+    const std::vector<std::vector<int>> &nodeUnPos = t.getNodeUnPos(nID);
+    const std::vector<std::vector<int>> &greaterPos = t.getNodeGreaterPos(nID);
+    const std::vector<std::vector<int>> &lessPos = t.getNodeLessPos(nID);
+    const std::vector<std::vector<int>> &childKeyPos = t.getChildKeyPos(nID);
+    const std::vector<VertexID> &aggreV = t.getAggreV();
+    const std::vector<int> &aggreWeight = t.getAggreWeight();
+    const std::vector<std::vector<VertexID>> &nodesAtStep = t.getNodesAtStep()[nID];
+    const std::vector<std::vector<int>> &prefixPos = t.getPrefixPos();
+    EdgeID *inOffset = din.getOffsets();
+    VertexID *inNbors = din.getNbors();
+    EdgeID *outOffset = dout.getOffsets();
+    VertexID *outNbors = dout.getNbors();
+    EdgeID *unOffset = dun.getOffsets();
+    VertexID *unNbors = dun.getNbors();
+    VertexID **candidate = candidates[nID];
+    ui *candCount = candCounts[nID];
+    ui *pos = poses[nID];
+    VertexID *patternV = patternVs[nID];
+    VertexID *dataV = dataVs[nID];
+    EdgeID *startOffset = startOffsets[nID];
+    bool *visited = visits[nID];
+    ui *keyPos = keyPoses[nID];
+    ui &keyPosSize = keyPosSizes[nID];
+    ui sizeBound = sizeBounds[nID];
+    bool isRoot = nID == t.getRootID();
+    ui n = dun.getNumVertices(), m = dun.getNumEdges();
+    if (tau.prefixSize != 0) {
+        for (int i = 0; i < nodesAtStep[0].size(); ++i) {
+            VertexID cID = nodesAtStep[0][i];
+            for (int j = 0; j < prefixPos[cID].size(); ++j) {
+                patternVs[cID][j] = patternV[prefixPos[cID][j]];
+                dataVs[cID][j] = dataV[prefixPos[cID][j]];
+                startOffsets[cID][j] = startOffset[prefixPos[cID][j]];
+                poses[cID][j] = pos[prefixPos[cID][j]];
+                visits[cID][dataVs[cID][j]] = true;
+            }
+            if (t.getNode(cID).keySize == 0) H[cID][0] = 0;
+            else if (t.getNode(cID).keySize == 1) {
+                if (keyPosSizes[cID] < n / 8 + 1) {
+                    for (int j = 0; j < keyPosSizes[cID]; ++j) {
+                        H[cID][keyPoses[cID][j]] = 0;
+                    }
+                }
+                else memset(H[cID], 0, sizeof(Count) * n);
+            }
+            else {
+                if (keyPosSizes[cID] < m / 8 + 1) {
+                    for (int j = 0; j < keyPosSizes[cID]; ++j) {
+                        H[cID][keyPoses[cID][j]] = 0;
+                    }
+                }
+                else memset(H[cID], 0, sizeof(Count) * m);
+            }
+            multiJoinWrapper(cID, t, t.getChild()[cID], candidates, candCounts, H, din, dout, dun, false, tri, p, outID, unID,
+                             reverseID, startOffsets, patternVs, dataVs, visits, poses, keyPoses, keyPosSizes, sizeBounds, tmp, allV, start, end);
+            for (int j = 0; j < prefixPos[cID].size(); ++j) {
+                visits[cID][dataVs[cID][j]] = false;
+            }
+        }
+    }
+    int mappingSize = tau.prefixSize;
+    if (mappingSize == 0) {
+        candidate[0] = allV;
+        candCount[0] = end;
+        pos[0] = start;
+    }
+    else {
+        if (!nodeInterPos[mappingSize]) {
+            if (!nodeOutPos[mappingSize].empty()) {
+                VertexID v = dataV[nodeOutPos[mappingSize][0]];
+                startOffset[mappingSize] = outOffset[v];
+                candidate[mappingSize] = outNbors + outOffset[v];
+                candCount[mappingSize] = outOffset[v + 1] - outOffset[v];
+            }
+            else if (!nodeInPos[mappingSize].empty()){
+                VertexID v = dataV[nodeInPos[mappingSize][0]];
+                startOffset[mappingSize] = inOffset[v];
+                candidate[mappingSize] = inNbors + inOffset[v];
+                candCount[mappingSize] = inOffset[v + 1] - inOffset[v];
+            }
+            else {
+                VertexID v = dataV[nodeUnPos[mappingSize][0]];
+                startOffset[mappingSize] = unOffset[v];
+                candidate[mappingSize] = unNbors + unOffset[v];
+                candCount[mappingSize] = unOffset[v + 1] - unOffset[v];
+            }
+        }
+        else {
+            generateCandidate(din, dout, dun, dataV, mappingSize, nodeInPos[mappingSize],
+                              nodeOutPos[mappingSize], nodeUnPos[mappingSize], candidate, candCount, tmp);
+        }
+        pos[mappingSize] = 0;
+        // apply the symmetry breaking rules
+        if (!greaterPos[mappingSize].empty()) {
+            ui maxTarget = dataV[greaterPos[mappingSize][0]];
+            for (int i = 1; i < greaterPos[mappingSize].size(); ++i) {
+                if (dataV[greaterPos[mappingSize][i]] > maxTarget)
+                    maxTarget = dataV[greaterPos[mappingSize][i]];
+            }
+            pos[mappingSize] = firstPosGreaterThan(candidate[mappingSize], 0, candCount[mappingSize], maxTarget);
+        }
+        if (!lessPos[mappingSize].empty()) {
+            ui minTarget = dataV[lessPos[mappingSize][0]];
+            for (int i = 1; i < lessPos[mappingSize].size(); ++i) {
+                if (dataV[lessPos[mappingSize][i]] < minTarget)
+                    minTarget = dataV[lessPos[mappingSize][i]];
+            }
+            candCount[mappingSize] = firstPosGreaterThan(candidate[mappingSize], 0, candCount[mappingSize], minTarget);
+        }
+    }
+    pos[0] = start;
+    while (mappingSize >= (int)tau.prefixSize) {
+        while (pos[mappingSize] < candCount[mappingSize]) {
+            VertexID v = candidate[mappingSize][pos[mappingSize]];
+            ++pos[mappingSize];
+            if (visited[v]) continue;
+            visited[v] = true;
+            patternV[mappingSize] = tau.nodeOrder[mappingSize];
+            dataV[mappingSize] = v;
+            for (int i = 0; i < nodesAtStep[mappingSize].size(); ++i) {
+                VertexID cID = nodesAtStep[mappingSize][i];
+                for (int j = 0; j < prefixPos[cID].size(); ++j) {
+                    patternVs[cID][j] = patternV[prefixPos[cID][j]];
+                    dataVs[cID][j] = dataV[prefixPos[cID][j]];
+                    startOffsets[cID][j] = startOffset[prefixPos[cID][j]];
+                    poses[cID][j] = pos[prefixPos[cID][j]];
+                    visits[cID][dataVs[cID][j]] = true;
+                }
+                if (t.getNode(cID).keySize == 0) H[cID][0] = 0;
+                else if (t.getNode(cID).keySize == 1) {
+                    if (keyPosSizes[cID] < n / 8 + 1) {
+                        for (int j = 0; j < keyPosSizes[cID]; ++j) {
+                            H[cID][keyPoses[cID][j]] = 0;
+                        }
+                    }
+                    else memset(H[cID], 0, sizeof(Count) * n);
+                }
+                else {
+                    if (keyPosSizes[cID] < m / 8 + 1) {
+                        for (int j = 0; j < keyPosSizes[cID]; ++j) {
+                            H[cID][keyPoses[cID][j]] = 0;
+                        }
+                    }
+                    else memset(H[cID], 0, sizeof(Count) * m);
+                }
+                multiJoinWrapper(cID, t, t.getChild()[cID], candidates, candCounts, H, din, dout, dun, false, tri, p, outID, unID,
+                                 reverseID, startOffsets, patternVs, dataVs, visits, poses, keyPoses, keyPosSizes, sizeBounds, tmp, allV, start, end);
                 for (int j = 0; j < prefixPos[cID].size(); ++j) {
                     visits[cID][dataVs[cID][j]] = false;
                 }
@@ -2620,6 +3685,344 @@ void multiJoinE(
     }
 }
 
+void multiJoinE(
+        VertexID nID,
+        const Tree &t,
+        const std::vector<VertexID> &child,
+        VertexID ***candidates,
+        ui **candCounts,
+        HashTable *H,
+        const DataGraph &din,
+        const DataGraph &dout,
+        const DataGraph &dun,
+        const Triangle &tri,
+        const Pattern &p,
+        EdgeID *outID,
+        EdgeID *unID,
+        EdgeID *reverseID,
+        EdgeID **startOffsets,
+        VertexID **patternVs,
+        VertexID **dataVs,
+        bool **visits,
+        ui **poses,
+        ui **keyPoses,
+        ui *keyPosSizes,
+        ui *sizeBounds,
+        VertexID *&tmp,
+        VertexID *allV,
+        ui start,
+        ui end
+) {
+    int orbitType = t.getOrbitType();
+    HashTable h = H[nID];
+    const Node &tau = t.getNode(nID);
+    const std::vector<int> &aggrePos = t.getAggrePos(nID);
+    const std::vector<bool> &nodeInterPos = t.getNodeInterPos(nID);
+    const std::vector<bool> &nodeCandPos = t.getNodeCandPos(nID);
+    const std::vector<std::vector<int>> &nodeInPos = t.getNodeInPos(nID);
+    const std::vector<std::vector<int>> &nodeOutPos = t.getNodeOutPos(nID);
+    const std::vector<std::vector<int>> &nodeUnPos = t.getNodeUnPos(nID);
+    const std::vector<std::vector<int>> &greaterPos = t.getNodeGreaterPos(nID);
+    const std::vector<std::vector<int>> &lessPos = t.getNodeLessPos(nID);
+    const std::vector<std::vector<int>> &childKeyPos = t.getChildKeyPos(nID);
+    const std::vector<VertexID> &aggreV = t.getAggreV();
+    const std::vector<int> &aggreWeight = t.getAggreWeight();
+    const std::vector<std::vector<int>> &posChildEdge = t.getPosChildEdge(nID);
+    const std::vector<std::vector<int>> &posAggreEdge = t.getPosAggreEdge(nID);
+    const std::vector<int> &childEdgeType = t.getChildEdgeType(nID);
+    const std::vector<int> &aggreEdgeType = t.getAggreEdgeType(nID);
+    const std::vector<std::vector<VertexID>> &nodesAtStep = t.getNodesAtStep()[nID];
+    const std::vector<std::vector<int>> &prefixPos = t.getPrefixPos();
+    EdgeID *inOffset = din.getOffsets();
+    VertexID *inNbors = din.getNbors();
+    EdgeID *outOffset = dout.getOffsets();
+    VertexID *outNbors = dout.getNbors();
+    EdgeID *unOffset = dun.getOffsets();
+    VertexID *unNbors = dun.getNbors();
+    VertexID **candidate = candidates[nID];
+    ui *candCount = candCounts[nID];
+    ui *pos = poses[nID];
+    VertexID *patternV = patternVs[nID];
+    VertexID *dataV = dataVs[nID];
+    EdgeID *startOffset = startOffsets[nID];
+    bool *visited = visits[nID];
+    ui *keyPos = keyPoses[nID];
+    ui &keyPosSize = keyPosSizes[nID];
+    ui sizeBound = sizeBounds[nID];
+    bool isRoot = nID == t.getRootID();
+    std::vector<EdgeID> childKey(child.size());
+    std::vector<EdgeID> aggreKey;
+    if (isRoot && orbitType == 2) aggreKey = std::vector<EdgeID>(aggreWeight.size());
+    else if (tau.keySize == 2) aggreKey.push_back(0);
+    ui n = dun.getNumVertices(), m = dun.getNumEdges();
+    if (tau.prefixSize != 0) {
+        for (int i = 0; i < nodesAtStep[0].size(); ++i) {
+            VertexID cID = nodesAtStep[0][i];
+            for (int j = 0; j < prefixPos[cID].size(); ++j) {
+                patternVs[cID][j] = patternV[prefixPos[cID][j]];
+                dataVs[cID][j] = dataV[prefixPos[cID][j]];
+                startOffsets[cID][j] = startOffset[prefixPos[cID][j]];
+                poses[cID][j] = pos[prefixPos[cID][j]];
+                visits[cID][dataVs[cID][j]] = true;
+            }
+            if (t.getNode(cID).keySize == 0) H[cID][0] = 0;
+            else if (t.getNode(cID).keySize == 1) {
+                if (keyPosSizes[cID] < n / 8 + 1) {
+                    for (int j = 0; j < keyPosSizes[cID]; ++j) {
+                        H[cID][keyPoses[cID][j]] = 0;
+                    }
+                }
+                else memset(H[cID], 0, sizeof(Count) * n);
+            }
+            else {
+                if (keyPosSizes[cID] < m / 8 + 1) {
+                    for (int j = 0; j < keyPosSizes[cID]; ++j) {
+                        H[cID][keyPoses[cID][j]] = 0;
+                    }
+                }
+                else memset(H[cID], 0, sizeof(Count) * m);
+            }
+            multiJoinWrapper(cID, t, t.getChild()[cID], candidates, candCounts, H, din, dout, dun, false, tri, p, outID, unID,
+                             reverseID, startOffsets, patternVs, dataVs, visits, poses, keyPoses, keyPosSizes, sizeBounds, tmp, allV, start, end);
+            for (int j = 0; j < prefixPos[cID].size(); ++j) {
+                visits[cID][dataVs[cID][j]] = false;
+            }
+        }
+    }
+    int mappingSize = tau.prefixSize;
+    for (int i = 1; i < mappingSize; ++i) {
+        // for child edge keys, compute the key value
+        for (int j: posChildEdge[i]) {
+            childKey[j] = computeEdgeKey(din, dout, dun, outID, unID, reverseID, startOffset, i, pos,
+                                         childEdgeType[j], dataV[childKeyPos[j][0]], dataV[childKeyPos[j][1]]);
+        }
+        // for aggregation edge keys, compute the key value
+        for (int j: posAggreEdge[i]) {
+            aggreKey[j] = computeEdgeKey(din, dout, dun, outID, unID, reverseID, startOffset, i, pos,
+                                         aggreEdgeType[j], dataV[aggrePos[2 * j]], dataV[aggrePos[2 * j + 1]]);
+        }
+    }
+    if (mappingSize == 0) {
+        candidate[0] = allV;
+        candCount[0] = end;
+        pos[0] = start;
+    }
+    else {
+        if (!nodeInterPos[mappingSize]) {
+            if (!nodeOutPos[mappingSize].empty()) {
+                VertexID v = dataV[nodeOutPos[mappingSize][0]];
+                startOffset[mappingSize] = outOffset[v];
+                candidate[mappingSize] = outNbors + outOffset[v];
+                candCount[mappingSize] = outOffset[v + 1] - outOffset[v];
+            }
+            else if (!nodeInPos[mappingSize].empty()){
+                VertexID v = dataV[nodeInPos[mappingSize][0]];
+                startOffset[mappingSize] = inOffset[v];
+                candidate[mappingSize] = inNbors + inOffset[v];
+                candCount[mappingSize] = inOffset[v + 1] - inOffset[v];
+            }
+            else {
+                VertexID v = dataV[nodeUnPos[mappingSize][0]];
+                startOffset[mappingSize] = unOffset[v];
+                candidate[mappingSize] = unNbors + unOffset[v];
+                candCount[mappingSize] = unOffset[v + 1] - unOffset[v];
+            }
+        }
+        else {
+            generateCandidate(din, dout, dun, dataV, mappingSize, nodeInPos[mappingSize],
+                              nodeOutPos[mappingSize], nodeUnPos[mappingSize], candidate, candCount, tmp);
+        }
+        pos[mappingSize] = 0;
+        // apply the symmetry breaking rules
+        if (!greaterPos[mappingSize].empty()) {
+            ui maxTarget = dataV[greaterPos[mappingSize][0]];
+            for (int i = 1; i < greaterPos[mappingSize].size(); ++i) {
+                if (dataV[greaterPos[mappingSize][i]] > maxTarget)
+                    maxTarget = dataV[greaterPos[mappingSize][i]];
+            }
+            pos[mappingSize] = firstPosGreaterThan(candidate[mappingSize], 0, candCount[mappingSize], maxTarget);
+        }
+        if (!lessPos[mappingSize].empty()) {
+            ui minTarget = dataV[lessPos[mappingSize][0]];
+            for (int i = 1; i < lessPos[mappingSize].size(); ++i) {
+                if (dataV[lessPos[mappingSize][i]] < minTarget)
+                    minTarget = dataV[lessPos[mappingSize][i]];
+            }
+            candCount[mappingSize] = firstPosGreaterThan(candidate[mappingSize], 0, candCount[mappingSize], minTarget);
+        }
+    }
+    pos[0] = start;
+    while (mappingSize >= (int)tau.prefixSize) {
+        while (pos[mappingSize] < candCount[mappingSize]) {
+            // if (nID == 0 && mappingSize == 0) {
+            //     print_hash_table(H, dun.getNumEdges(), t.getNumNodes());
+            // }
+            VertexID v = candidate[mappingSize][pos[mappingSize]];
+            ++pos[mappingSize];
+            if (visited[v]) continue;
+            visited[v] = true;
+            patternV[mappingSize] = tau.nodeOrder[mappingSize];
+            dataV[mappingSize] = v;
+            // for child edge keys, compute the key value
+            for (int j: posChildEdge[mappingSize]) {
+                childKey[j] = computeEdgeKey(din, dout, dun, outID, unID, reverseID, startOffset, mappingSize, pos,
+                                             childEdgeType[j], dataV[childKeyPos[j][0]], dataV[childKeyPos[j][1]]);
+            }
+            // for aggregation edge keys, compute the key value
+            for (int j: posAggreEdge[mappingSize]) {
+                aggreKey[j] = computeEdgeKey(din, dout, dun, outID, unID, reverseID, startOffset, mappingSize, pos,
+                                             aggreEdgeType[j], dataV[aggrePos[2 * j]], dataV[aggrePos[2 * j + 1]]);
+            }
+            for (int i = 0; i < nodesAtStep[mappingSize].size(); ++i) {
+                VertexID cID = nodesAtStep[mappingSize][i];
+                for (int j = 0; j < prefixPos[cID].size(); ++j) {
+                    patternVs[cID][j] = patternV[prefixPos[cID][j]];
+                    dataVs[cID][j] = dataV[prefixPos[cID][j]];
+                    startOffsets[cID][j] = startOffset[prefixPos[cID][j]];
+                    poses[cID][j] = pos[prefixPos[cID][j]];
+                    visits[cID][dataVs[cID][j]] = true;
+                }
+                if (t.getNode(cID).keySize == 0) H[cID][0] = 0;
+                else if (t.getNode(cID).keySize == 1) {
+                    if (keyPosSizes[cID] < n / 8 + 1) {
+                        for (int j = 0; j < keyPosSizes[cID]; ++j) {
+                            H[cID][keyPoses[cID][j]] = 0;
+                        }
+                    }
+                    else memset(H[cID], 0, sizeof(Count) * n);
+                }
+                else {
+                    if (keyPosSizes[cID] < m / 8 + 1) {
+                        for (int j = 0; j < keyPosSizes[cID]; ++j) {
+                            H[cID][keyPoses[cID][j]] = 0;
+                        }
+                    }
+                    else memset(H[cID], 0, sizeof(Count) * m);
+                }
+                multiJoinWrapper(cID, t, t.getChild()[cID], candidates, candCounts, H, din, dout, dun, false, tri, p, outID, unID,
+                                 reverseID, startOffsets, patternVs, dataVs, visits, poses, keyPoses, keyPosSizes, sizeBounds, tmp, allV, start, end);
+                for (int j = 0; j < prefixPos[cID].size(); ++j) {
+                    visits[cID][dataVs[cID][j]] = false;
+                }
+            }
+            if (mappingSize == tau.numVertices - 1) {
+#ifdef COLLECT_STATISTICS
+                ++gNumMatch;
+#endif
+                Count cnt = 1;
+                // multiply count in children
+                for (int j = 0; j < child.size(); ++j) {
+                    VertexID cID = child[j];
+                    if (childKeyPos[j].empty()) cnt *= H[cID][0];
+                    else if (childKeyPos[j].size() == 1) {
+                        cnt *= H[cID][dataV[childKeyPos[j][0]]];
+                    }
+                    else {
+                        cnt *= H[cID][childKey[j]];
+                    }
+                }
+                if (isRoot) {
+                    if (orbitType == 0) h[0] += cnt * aggreWeight[0];
+                    else if (orbitType == 1) {
+                        for (int j = 0; j < aggreV.size(); ++j) {
+                            VertexID key = dataV[aggrePos[j]];
+#ifdef COLLECT_STATISTICS
+                            ++gNumUpdate;
+#endif
+                            h[key] += cnt * aggreWeight[j];
+                        }
+                    }
+                    else {
+                        for (int j = 0; j < aggreKey.size(); ++j) {
+#ifdef COLLECT_STATISTICS
+                            ++gNumUpdate;
+#endif
+                            h[aggreKey[j]] += cnt * aggreWeight[j];
+                        }
+                    }
+                }
+                else {
+                    if (tau.keySize == 0) h[0] += cnt;
+                    else if (tau.keySize == 1) {
+#ifdef COLLECT_STATISTICS
+                        ++gNumUpdate;
+#endif
+                        h[dataV[aggrePos[0]]] += cnt;
+                        if (keyPosSize < sizeBound) {
+                            keyPos[keyPosSize] = dataV[aggrePos[0]];
+                            ++keyPosSize;
+                        }
+                    }
+                    else {
+                        EdgeID e = aggreKey[0];
+#ifdef COLLECT_STATISTICS
+                        ++gNumUpdate;
+#endif
+                        h[e] += cnt;
+                        if (keyPosSize < sizeBound) {
+                            keyPos[keyPosSize] = e;
+                            ++keyPosSize;
+                        }
+                    }
+                }
+                visited[dataV[mappingSize]] = false;
+            }
+            else {
+#ifdef COLLECT_STATISTICS
+                ++gNumIntermediate;
+#endif
+                ++mappingSize;
+                pos[mappingSize] = 0;
+                if (!nodeInterPos[mappingSize]) {
+                    if (!nodeOutPos[mappingSize].empty()) {
+                        VertexID w = dataV[nodeOutPos[mappingSize][0]];
+                        startOffset[mappingSize] = outOffset[w];
+                        candidate[mappingSize] = outNbors + outOffset[w];
+                        candCount[mappingSize] = outOffset[w + 1] - outOffset[w];
+                    }
+                    else if (!nodeInPos[mappingSize].empty()){
+                        VertexID w = dataV[nodeInPos[mappingSize][0]];
+                        startOffset[mappingSize] = inOffset[w];
+                        candidate[mappingSize] = inNbors + inOffset[w];
+                        candCount[mappingSize] = inOffset[w + 1] - inOffset[w];
+                    }
+                    else {
+                        VertexID w = dataV[nodeUnPos[mappingSize][0]];
+                        startOffset[mappingSize] = unOffset[w];
+                        candidate[mappingSize] = unNbors + unOffset[w];
+                        candCount[mappingSize] = unOffset[w + 1] - unOffset[w];
+                    }
+                }
+                else {
+                    generateCandidate(din, dout, dun, dataV, mappingSize, nodeInPos[mappingSize],
+                                      nodeOutPos[mappingSize], nodeUnPos[mappingSize], candidate, candCount, tmp);
+                }
+                // apply the symmetry breaking rules
+                if (!greaterPos[mappingSize].empty()) {
+                    ui maxTarget = dataV[greaterPos[mappingSize][0]];
+                    for (int i = 1; i < greaterPos[mappingSize].size(); ++i) {
+                        if (dataV[greaterPos[mappingSize][i]] > maxTarget)
+                            maxTarget = dataV[greaterPos[mappingSize][i]];
+                    }
+                    pos[mappingSize] = firstPosGreaterThan(candidate[mappingSize], 0, candCount[mappingSize], maxTarget);
+                }
+                if (!lessPos[mappingSize].empty()) {
+                    ui minTarget = dataV[lessPos[mappingSize][0]];
+                    for (int i = 1; i < lessPos[mappingSize].size(); ++i) {
+                        if (dataV[lessPos[mappingSize][i]] < minTarget)
+                            minTarget = dataV[lessPos[mappingSize][i]];
+                    }
+                    candCount[mappingSize] = firstPosGreaterThan(candidate[mappingSize], 0, candCount[mappingSize], minTarget);
+                }
+            }
+        }
+        --mappingSize;
+        if (mappingSize >= (int)tau.prefixSize) {
+            visited[dataV[mappingSize]] = false;
+        }
+    }
+}
+
 void multiJoinET(
         VertexID nID,
         const Tree &t,
@@ -3040,6 +4443,58 @@ void multiJoinWrapper(
     }
 }
 
+void multiJoinWrapper(
+        VertexID nID,
+        const Tree &t,
+        const std::vector<VertexID> &child,
+        VertexID ***candidates,
+        ui **candCounts,
+        HashTable *H,
+        const DataGraph &din,
+        const DataGraph &dout,
+        const DataGraph &dun,
+        bool useTriangle,
+        const Triangle &tri,
+        const Pattern &p,
+        EdgeID *outID,
+        EdgeID *unID,
+        EdgeID *reverseID,
+        EdgeID **startOffsets,
+        VertexID **patternVs,
+        VertexID **dataVs,
+        bool **visits,
+        ui **poses,
+        ui **keyPoses,
+        ui *keyPosSizes,
+        ui *sizeBounds,
+        VertexID *&tmp,
+        VertexID *allV,
+        ui start,
+        ui end
+) {
+    bool edgeKey = t.getNode(nID).edgeKey;
+    if (!useTriangle) {
+        if (!edgeKey) {
+            multiJoin(nID, t, child, candidates, candCounts, H, din, dout, dun, tri, p, outID, unID, reverseID,
+                      startOffsets, patternVs, dataVs, visits, poses, keyPoses, keyPosSizes, sizeBounds, tmp, allV, start, end);
+        }
+        else {
+            multiJoinE(nID, t, child, candidates, candCounts, H, din, dout, dun, tri, p, outID, unID, reverseID,
+                       startOffsets, patternVs, dataVs, visits, poses, keyPoses, keyPosSizes, sizeBounds, tmp, allV, start, end);
+        }
+    }
+    else {
+        if (!edgeKey) {
+            multiJoinT(nID, t, child, candidates, candCounts, H, din, dout, dun, tri, p, outID, unID, reverseID,
+                       startOffsets, patternVs, dataVs, visits, poses, keyPoses, keyPosSizes, sizeBounds, tmp, allV);
+        }
+        else {
+            multiJoinET(nID, t, child, candidates, candCounts, H, din, dout, dun, tri, p, outID, unID, reverseID,
+                        startOffsets, patternVs, dataVs, visits, poses, keyPoses, keyPosSizes, sizeBounds, tmp, allV);
+        }
+    }
+}
+
 void multiJoinTree(
         const Tree &t,
         const DataGraph &din,
@@ -3073,15 +4528,9 @@ void multiJoinTree(
         const std::vector<bool> &nodeCandPos = t.getNodeCandPos(nID);
         for (ui i = tau.prefixSize; i < tau.numVertices; ++i) {
             if (nodeCandPos[i])
-                // when there is only 1 predNeighbor of a patternV, we do not need to compute its candidate
-                // It's candidate is just the neighbors of its predNeighbor
-                // We just point the candidate to the graph._neighbor + graph._offsets[predNeighbor]
                 candidate[nID][i] = new VertexID[dout.getNumVertices()];
         }
     }
-    // This record which position of the intermidate has been updated
-    // If only a small portion is updated, we can just reset them to 0 one by one
-    // instead of reset the whole array which size is m (|E|)
     ui **keyPos = new ui *[t.getNumNodes()];
     ui *keyPosSize = new ui[t.getNumNodes()];
     memset(keyPosSize, 0, sizeof(ui) * (t.getNumNodes()));
@@ -3098,11 +4547,109 @@ void multiJoinTree(
     // call simple nodes
     for (VertexID nID: t.getPostOrder()) {
         if (t.getNode(nID).prefixSize == 0) {
+
             multiJoinWrapper(nID, t, t.getChild()[nID], candidate, candCount, H, din, dout, dun, useTriangle, tri, p,
                              outID, unID, reverseID, startOffset, patternV, dataV, visited,
                              pos, keyPos, keyPosSize, sizeBounds, tmp, allV);
         }
     }
+    for (VertexID nID = 0; nID < numNodes; ++nID) {
+        const Node &tau = t.getNode(nID);
+        const std::vector<bool> &nodeCandPos = t.getNodeCandPos(nID);
+        for (ui i = tau.prefixSize; i < tau.numVertices; ++i) {
+            if (nodeCandPos[i])
+                delete[] candidate[nID][i];
+        }
+        delete[] candidate[nID];
+        delete[] candCount[nID];
+        delete[] pos[nID];
+        delete[] keyPos[nID];
+    }
+    delete[] candCount;
+    delete[] candidate;
+    delete[] pos;
+    delete[] keyPos;
+}
+
+void multiJoinTree(
+        const Tree &t,
+        const DataGraph &din,
+        const DataGraph &dout,
+        const DataGraph &dun,
+        bool useTriangle,
+        const Triangle &tri,
+        const Pattern &p,
+        HashTable *H,
+        EdgeID *outID,
+        EdgeID *unID,
+        EdgeID *reverseID,
+        EdgeID **startOffset,
+        VertexID **patternV,
+        VertexID **dataV,
+        bool **visited,
+        VertexID *&tmp,
+        VertexID *allV,
+        ParallelProcessingMeta *pMeta
+) {
+    int numNodes = (int)t.getNumNodes();
+    ui n = dun.getNumVertices(), m = dun.getNumEdges();
+    VertexID ***candidate = new VertexID **[numNodes];
+    ui **candCount = new ui *[numNodes];
+    ui **pos = new ui *[numNodes];
+    for (VertexID nID = 0; nID < numNodes; ++nID) {
+        const Node &tau = t.getNode(nID);
+        candCount[nID] = new ui[tau.numVertices];
+        candidate[nID] = new VertexID *[tau.numVertices];
+        pos[nID] = new ui[tau.numVertices];
+        memset(pos[nID], 0, sizeof(ui) * tau.numVertices);
+        const std::vector<bool> &nodeCandPos = t.getNodeCandPos(nID);
+        for (ui i = tau.prefixSize; i < tau.numVertices; ++i) {
+            if (nodeCandPos[i])
+                candidate[nID][i] = new VertexID[dout.getNumVertices()];
+        }
+    }
+    ui **keyPos = new ui *[t.getNumNodes()];
+    ui *keyPosSize = new ui[t.getNumNodes()];
+    memset(keyPosSize, 0, sizeof(ui) * (t.getNumNodes()));
+    ui *sizeBounds = new ui[t.getNumNodes()];
+    for (VertexID nID = 0; nID < numNodes; ++nID) {
+        if (t.getNode(nID).keySize == 0)
+            sizeBounds[nID] = 1;
+        else if (t.getNode(nID).keySize == 1)
+            sizeBounds[nID] = n / 8 + 1;
+        else if (t.getNode(nID).keySize == 2)
+            sizeBounds[nID] = m / 8 + 1;
+        keyPos[nID] = new ui[sizeBounds[nID]];
+    }
+    // call simple nodes
+    pMeta->setMultiJoinCandidates(t, dun);
+    tbb::task_group taskGroup;
+    ExecuteMultiJoinWorker worker(pMeta, t, din, dout, dun, useTriangle, tri, p, outID, unID, reverseID, allV);
+    for (ui i = 0; i < n; i += pMeta->_prefix_partition_size) {
+        ui start = i;
+        ui end = std::min(i + pMeta->_prefix_partition_size, n);
+        taskGroup.run([&worker, start, end]() {
+            worker(start, end);
+        });
+    }
+    taskGroup.wait();
+    pMeta->clearMultiJoinCandidates(t);
+    // for (VertexID nID: t.getPostOrder()) {
+    //     if (t.getNode(nID).prefixSize == 0) {
+    //         multiJoinWrapper(nID, t, t.getChild()[nID], candidate, candCount, H, din, dout, dun, useTriangle, tri, p,
+    //                          outID, unID, reverseID, startOffset, patternV, dataV, visited,
+    //                          pos, keyPos, keyPosSize, sizeBounds, tmp, allV);
+    //     }
+    // }
+    // combine the results
+    ui rootID = t.getRootID();
+    for (ui i = 0; i < pMeta->_num_threads; i++) {
+        HashTable thread_local_H = pMeta->_total_hash_table[i][rootID];
+        for (ui j = 0; j < m; j++) {
+            H[rootID][j] += thread_local_H[j];
+        }
+    }
+    // print_hash_table(H, m, t.getNumNodes());
     for (VertexID nID = 0; nID < numNodes; ++nID) {
         const Node &tau = t.getNode(nID);
         const std::vector<bool> &nodeCandPos = t.getNodeCandPos(nID);
@@ -5771,5 +7318,307 @@ void executeForest(Forest &f, std::vector<HashTable> &result, const DataGraph &d
     for (int tableID = 0; tableID < keyPoses.size(); ++tableID) {
         if (keyPoses[tableID] != nullptr)
             delete[] keyPoses[tableID];
+    }
+}
+
+ExecutePartitionWorker::ExecutePartitionWorker(
+                ParallelProcessingMeta *pMeta,
+                const Tree &t,
+                const std::vector<std::vector<VertexID>> &globalOrder,
+                const std::vector<std::vector<std::vector<VertexID>>> &nodesAtStep,
+                const std::vector<VertexID> &partitionOrder,
+                const std::vector<std::vector<VertexID>> &child,
+                const std::vector<VertexID> &postOrder,
+                const std::vector<int> &partitionPos,
+                const std::vector<std::vector<int>> &partitionInPos,
+                const std::vector<std::vector<int>> &partitionOutPos,
+                const std::vector<std::vector<int>> &partitionUnPos,
+                const std::vector<bool> &partitionInterPos,
+                const std::vector<std::vector<int>> &greaterPos,
+                const std::vector<std::vector<int>> &lessPos,
+                const std::vector<bool> &partitionCandPos,
+                const std::vector<std::pair<int, int>> &partitionTriPos,
+                const std::vector<int> &triEdgeType,
+                const std::vector<int> &triEndType,
+                EdgeID *inOffset,
+                VertexID *inNbors,
+                EdgeID *outOffset,
+                VertexID *outNbors,
+                EdgeID *unOffset,
+                EdgeID *unNbors,
+                const DataGraph &din,
+                const DataGraph &dout,
+                const DataGraph &dun,
+                bool useTriangle,
+                const Triangle &tri,
+                EdgeID *outID,
+                EdgeID *unID,
+                EdgeID *reverseID,
+                VertexID pID,
+                const Pattern &p,
+                const std::vector<std::vector<VertexID>> &allChild,
+                int endPos,
+                bool isRoot,
+                VertexID *allV) : 
+                pMeta(pMeta), t(t), globalOrder(globalOrder), nodesAtStep(nodesAtStep), partitionOrder(partitionOrder),
+                child(child), postOrder(postOrder), partitionPos(partitionPos), partitionInPos(partitionInPos),
+                partitionOutPos(partitionOutPos), partitionUnPos(partitionUnPos), partitionInterPos(partitionInterPos),
+                greaterPos(greaterPos), lessPos(lessPos), partitionCandPos(partitionCandPos), partitionTriPos(partitionTriPos),
+                triEdgeType(triEdgeType), triEndType(triEndType), inOffset(inOffset), inNbors(inNbors), outOffset(outOffset),
+                outNbors(outNbors), unOffset(unOffset), unNbors(unNbors), din(din), dout(dout), dun(dun), useTriangle(useTriangle),
+                tri(tri), outID(outID), unID(unID), reverseID(reverseID), pID(pID), p(p), allChild(allChild),
+                endPos(endPos), isRoot(isRoot), allV(allV) {
+
+}
+
+ExecutePartitionWorker::~ExecutePartitionWorker() {
+
+}
+
+void ExecutePartitionWorker::operator()(ui start, ui end, int depth) {
+    if (pMeta->_thread_id_ets.local() == -1) {
+        pMeta->_thread_id_ets.local() = pMeta->_next_thread_id.fetch_add(1);
+    }
+    ui argument = 0;
+    // int depth = depth;
+    ui mappingSize = depth;
+
+    int thread_id = pMeta->_thread_id_ets.local();
+    ui* dataV = pMeta->_dataV[thread_id][0];
+    ui* patternV = pMeta->_patternV[thread_id][0];
+    VertexID*& tmp = pMeta->_total_tmp[thread_id];
+    HashTable* H = pMeta->_total_hash_table[thread_id];
+    ui** partitionCandidate = pMeta->_total_partition_candidates[thread_id];
+    ui* partitionCandCount = pMeta->_total_partition_candidates_cnt[thread_id];
+    ui* pos = pMeta->_total_partition_candidates_pos[thread_id];
+    bool* visited = pMeta->_total_visited_vertices[thread_id][0];
+    ui*** candidate = pMeta->_total_candidates[thread_id];
+    ui** candCount = pMeta->_total_candidates_cnt[thread_id];
+    EdgeID* startOffset = pMeta->_total_start_offset[thread_id][0];
+
+    ui** keyPos = pMeta->_total_key_pos[thread_id];
+    ui* keyPosSize = pMeta->_total_key_pos_size[thread_id];
+
+    ui n = dun.getNumVertices();
+    ui m = dun.getNumEdges();
+    if (depth == 0) {
+        // initialize the partition
+        pos[0] = start;
+        partitionCandidate[0] = allV;
+        partitionCandCount[0] = end;
+    } else {
+
+    }
+    while (depth >= 0) {
+        while (pos[depth] < partitionCandCount[depth]) {
+            VertexID v = partitionCandidate[depth][pos[depth]];
+            ++pos[depth];
+            if (visited[v]) continue;
+            visited[v] = true;
+            patternV[depth] = partitionOrder[depth];
+            dataV[depth] = v;
+            for (VertexID nID: nodesAtStep[pID][depth]) {
+                if (nID == postOrder[endPos - 1]) {
+                    if (!t.nodeEdgeKey(nID) && !useTriangle) {
+                        executeNode(nID, t, allChild[nID], candidate[nID], candCount[nID], H, din, dout, dun, p, isRoot, outID, unID, reverseID,
+                                    startOffset, patternV, dataV, mappingSize + 1, visited, pos, nullptr, argument, argument, tmp, allV);
+                    }
+                    else if (!t.nodeEdgeKey(nID) && useTriangle) {
+                        executeNodeT(nID, t, allChild[nID], candidate[nID], candCount[nID], H, din, dout, dun, tri, p, isRoot, outID, unID, reverseID,
+                                     startOffset, patternV, dataV, mappingSize + 1, visited, pos, nullptr, argument, argument, tmp, allV);
+                    }
+                    else if (t.nodeEdgeKey(nID) && !useTriangle) {
+                        executeNodeEdgeKey(nID, t, allChild[nID], candidate[nID], candCount[nID], H, din, dout, dun, p, isRoot, outID, unID, reverseID,
+                                           startOffset, patternV, dataV, mappingSize + 1, visited, pos, nullptr, argument, argument, tmp, allV);
+                    }
+                    else {
+                        executeNodeEdgeKeyT(nID, t, allChild[nID], candidate[nID], candCount[nID], H, din, dout, dun, tri, p, isRoot, outID, unID, reverseID,
+                                            startOffset, patternV, dataV, mappingSize + 1, visited, pos, nullptr, argument, argument, tmp, allV);
+                    }
+                }
+                else if (t.getNode(nID).keySize < 2) {
+                    if (keyPosSize[nID] < n / 8 + 1) {
+                        for (int j = 0; j < keyPosSize[nID]; ++j) {
+                            H[nID][keyPos[nID][j]] = 0;
+                        }
+                    }
+                    else
+                        memset(H[nID], 0, sizeof(Count) * n);
+                    keyPosSize[nID] = 0;
+                    ui sizeBound = 1;
+                    if (t.getNode(nID).keySize == 1) sizeBound = n / 8 + 1;
+                    if (t.getNode(nID).keySize == 2) sizeBound = m / 8 + 1;
+                    if (!t.nodeEdgeKey(nID) && !useTriangle) {
+                        executeNode(nID, t, allChild[nID], candidate[nID], candCount[nID], H, din, dout, dun, p, false, outID, unID, reverseID,
+                                    startOffset, patternV, dataV, mappingSize + 1, visited, pos, keyPos[nID], keyPosSize[nID], sizeBound, tmp, allV);
+                    }
+                    else if (!t.nodeEdgeKey(nID) && useTriangle) {
+                        executeNodeT(nID, t, allChild[nID], candidate[nID], candCount[nID], H, din, dout, dun, tri, p, false, outID, unID, reverseID,
+                                     startOffset, patternV, dataV, mappingSize + 1, visited, pos, keyPos[nID], keyPosSize[nID], sizeBound, tmp, allV);
+                    }
+                    else if (t.nodeEdgeKey(nID) && !useTriangle) {
+                        executeNodeEdgeKey(nID, t, allChild[nID], candidate[nID], candCount[nID], H, din, dout, dun, p, false, outID, unID, reverseID,
+                                           startOffset, patternV, dataV, mappingSize + 1, visited, pos, keyPos[nID], keyPosSize[nID], sizeBound, tmp, allV);
+                    }
+                    else {
+                        executeNodeEdgeKeyT(nID, t, allChild[nID], candidate[nID], candCount[nID], H, din, dout, dun, tri, p, false, outID, unID, reverseID,
+                                            startOffset, patternV, dataV, mappingSize + 1, visited, pos, keyPos[nID], keyPosSize[nID], sizeBound, tmp, allV);
+                    }
+                }
+                else {
+                    if (keyPosSize[nID] < m / 8) {
+                        for (int j = 0; j < keyPosSize[nID]; ++j) {
+                            H[nID][keyPos[nID][j]] = 0;
+                        }
+                    }
+                    else
+                        memset(H[nID], 0, sizeof(Count) * m);
+                    keyPosSize[nID] = 0;
+                    if (!useTriangle) {
+                        executeNodeEdgeKey(nID, t, allChild[nID], candidate[nID], candCount[nID], H, din, dout, dun, p, false, outID, unID, reverseID, startOffset,
+                                           patternV, dataV, mappingSize + 1, visited, pos, keyPos[nID], keyPosSize[nID], m / 8, tmp, allV);
+                    }
+                    else {
+                        executeNodeEdgeKeyT(nID, t, allChild[nID], candidate[nID], candCount[nID], H, din, dout, dun, tri, p, false, outID, unID, reverseID, startOffset,
+                                            patternV, dataV, mappingSize + 1, visited, pos, keyPos[nID], keyPosSize[nID], m / 8, tmp, allV);
+                    }
+                }
+            }
+            if (depth == partitionOrder.size() - 1) {
+                visited[dataV[mappingSize]] = false;
+            }
+            else {
+                ++mappingSize;
+                ++depth;
+                pos[depth] = 0;
+                if (!partitionInterPos[depth]) {
+                    if (!partitionOutPos[depth].empty()) {
+                        VertexID w = dataV[partitionOutPos[depth][0]];
+                        startOffset[mappingSize] = outOffset[w];
+                        partitionCandidate[depth] = outNbors + outOffset[w];
+                        partitionCandCount[depth] = outOffset[w + 1] - outOffset[w];
+                    }
+                    else if (!partitionInPos[depth].empty()){
+                        VertexID w = dataV[partitionInPos[depth][0]];
+                        startOffset[mappingSize] = inOffset[w];
+                        partitionCandidate[depth] = inNbors + inOffset[w];
+                        partitionCandCount[depth] = inOffset[w + 1] - inOffset[w];
+                    }
+                    else {
+                        VertexID w = dataV[partitionUnPos[depth][0]];
+                        startOffset[mappingSize] = unOffset[w];
+                        partitionCandidate[depth] = unNbors + unOffset[w];
+                        partitionCandCount[depth] = unOffset[w + 1] - unOffset[w];
+                    }
+                }
+                else {
+                    if (useTriangle) {
+                        EdgeID e = 0;
+                        if (triEdgeType[mappingSize] != 0) {
+                            int pos1 = partitionTriPos[mappingSize].first, pos2 = partitionTriPos[mappingSize].second;
+                            if (triEdgeType[mappingSize] == 1)
+                                e = startOffset[pos2] + pos[pos2] - 1;
+                            else if (triEdgeType[mappingSize] == 2)
+                                e = outID[startOffset[pos2] + pos[pos2] - 1];
+                            else if (triEdgeType[mappingSize] == 5)
+                                e = unID[startOffset[pos2] + pos[pos2] - 1];
+                            else{
+                                VertexID key1 = dataV[pos1], key2 = dataV[pos2];
+                                e = dout.getEdgeID(key1, key2);
+                            }
+                        }
+                        generateCandidateT(din, dout, dun, tri, dataV, mappingSize, !partitionCandPos[mappingSize], e, triEndType[mappingSize],
+                                           partitionInPos[mappingSize], partitionOutPos[mappingSize], partitionUnPos[mappingSize], partitionCandidate, partitionCandCount, tmp);
+
+                    }
+                    else {
+                        generateCandidate(din, dout, dun, dataV, depth, partitionInPos[depth], partitionOutPos[depth],
+                                          partitionUnPos[depth], partitionCandidate, partitionCandCount, tmp);
+                    }
+                }
+                // apply the symmetry breaking rules
+                if (!greaterPos[mappingSize].empty()) {
+                    ui maxTarget = dataV[greaterPos[mappingSize][0]];
+                    for (int i = 1; i < greaterPos[mappingSize].size(); ++i) {
+                        if (dataV[greaterPos[mappingSize][i]] > maxTarget)
+                            maxTarget = dataV[greaterPos[mappingSize][i]];
+                    }
+                    pos[mappingSize] = firstPosGreaterThan(partitionCandidate[mappingSize], 0, partitionCandCount[mappingSize], maxTarget);
+                }
+                if (!lessPos[mappingSize].empty()) {
+                    ui minTarget = dataV[lessPos[mappingSize][0]];
+                    for (int i = 1; i < lessPos[mappingSize].size(); ++i) {
+                        if (dataV[lessPos[mappingSize][i]] < minTarget)
+                            minTarget = dataV[lessPos[mappingSize][i]];
+                    }
+                    partitionCandCount[mappingSize] = firstPosGreaterThan(partitionCandidate[mappingSize], 0, partitionCandCount[mappingSize], minTarget);
+                }
+
+            }
+        }
+        --depth;
+        --mappingSize;
+        if (depth >= 0)
+            visited[dataV[depth]] = false;
+    }
+}
+
+ExecuteMultiJoinWorker::ExecuteMultiJoinWorker(
+                ParallelProcessingMeta *pMeta,
+                const Tree &t,
+                const DataGraph &din,
+                const DataGraph &dout,
+                const DataGraph &dun,
+                const bool useTriangle,
+                const Triangle &tri,
+                const Pattern &p,
+                EdgeID *outID,
+                EdgeID *unID,
+                EdgeID *reverseID,
+                VertexID *allV) : 
+                pMeta(pMeta), t(t), din(din), dout(dout), dun(dun),
+                useTriangle(useTriangle), tri(tri), p(p), outID(outID), unID(unID),
+                reverseID(reverseID), allV(allV) {
+
+}
+ExecuteMultiJoinWorker::~ExecuteMultiJoinWorker() {
+
+}
+
+void ExecuteMultiJoinWorker::operator()(ui start, ui end) {
+    if (pMeta->_thread_id_ets.local() == -1) {
+        pMeta->_thread_id_ets.local() = pMeta->_next_thread_id.fetch_add(1);
+    }
+
+    int thread_id = pMeta->_thread_id_ets.local();
+    ui** dataV = pMeta->_dataV[thread_id];
+    ui** patternV = pMeta->_patternV[thread_id];
+
+    for (VertexID nID: t.getPostOrder()) {
+        if (t.getNode(nID).prefixSize == 0) {
+            multiJoinWrapper(nID, t, t.getChild()[nID],
+                            pMeta->_total_candidates[thread_id],
+                            pMeta->_total_candidates_cnt[thread_id],
+                            pMeta->_total_hash_table[thread_id],
+                            din, dout, dun, useTriangle, tri, p,
+                            outID, unID, reverseID,
+                            pMeta->_total_start_offset[thread_id],
+                            patternV, dataV,
+                            pMeta->_total_visited_vertices[thread_id],
+                            pMeta->_total_multi_join_pos[thread_id],
+                            pMeta->_total_key_pos[thread_id],
+                            pMeta->_total_key_pos_size[thread_id],
+                            pMeta->_total_size_bounds[thread_id],
+                            pMeta->_total_tmp[thread_id],
+                            allV,
+                            start,
+                            end);
+        }
+    }
+    // print_hash_table(pMeta->_total_hash_table[thread_id], dun.getNumEdges(), t.getNumNodes());
+    for (int i = 0; i < t.getNumNodes(); i++) {
+        if (i != t.getRootID()) {
+            memset(pMeta->_total_hash_table[thread_id][i], 0, sizeof(Count) * dun.getNumEdges());
+        }
     }
 }

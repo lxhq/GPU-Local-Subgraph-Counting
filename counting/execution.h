@@ -12,12 +12,43 @@
 #include "compute_set_intersection.h"
 #include "forest.h"
 #include "triangle.h"
+#include "Pexecution.h"
 
 extern Count gNumIntersect;
 extern Count gNumMatch;
 extern Count gNumIntermediate;
 extern Count gNumEdgeID;
 extern Count gNumUpdate;
+
+// struct Task {
+// public:
+//         ui _start;
+//         ui _end;
+//         int _depth;
+//         // ui** _dataV;
+//         // ui** _patternV;
+//         Task(ui start, ui end, ui depth) : _start(start), _end(end), _depth(depth) {
+//                 // _dataV = new ui*[MAX_NUM_NODE];
+//                 // _patternV = new ui*[MAX_NUM_NODE];
+//                 // for (ui i = 0; i < MAX_NUM_NODE; ++i) {
+//                 //         _dataV[i] = new ui[MAX_PATTERN_SIZE];
+//                 //         _patternV[i] = new ui[MAX_PATTERN_SIZE];
+//                 // }
+//                 // _dataV = new ui[MAX_PATTERN_SIZE];
+//                 // _patternV = new ui[MAX_PATTERN_SIZE];
+//                 // std::copy(dataV, dataV + MAX_PATTERN_SIZE, _dataV);
+//                 // std::copy(patternV, patternV + MAX_PATTERN_SIZE, _patternV);
+//         }
+
+//         ~Task() {
+//                 // for (ui i = 0; i < MAX_NUM_NODE; ++i) {
+//                 //         delete[] _dataV[i];
+//                 //         delete[] _patternV[i];
+//                 // }
+//                 // delete[] _dataV;
+//                 // delete[] _patternV;
+//         }
+// };
 
 void saveCount(const std::string &resultPath, std::vector<HashTable> H, const DataGraph &d, bool batchQuery,
                const std::vector<std::string> &files, const std::vector<int> &orbitTypes);
@@ -127,6 +158,35 @@ void executeNodeT(
         VertexID *allV
 );
 
+void PexecuteNodeEdgeKey(
+        VertexID nID,
+        const Tree &t,
+        const std::vector<VertexID> &child,
+        VertexID **candidate,
+        ui *candCount,
+        HashTable *H,
+        const DataGraph &din,
+        const DataGraph &dout,
+        const DataGraph &dun,
+        const Pattern &p,
+        bool isRoot,
+        EdgeID *outID,
+        EdgeID *unID,
+        EdgeID *reverseID,
+        EdgeID *startOffset,
+        VertexID *patternV,
+        VertexID *dataV,
+        int mappingSize,
+        bool *visited,
+        ui *pos,
+        ui *keyPos,
+        ui &keyPosSize,
+        ui sizeBound,
+        VertexID *&tmp,
+        VertexID *allV,
+        ParallelProcessingMeta *pMeta
+);
+
 void executeNodeEdgeKey(
         VertexID nID,
         const Tree &t,
@@ -208,6 +268,53 @@ void executePartition(
         VertexID *allV
 );
 
+void executePartition(
+        VertexID pID,
+        const Tree &t,
+        VertexID ***candidate,
+        ui **candCount,
+        HashTable *H,
+        const DataGraph &din,
+        const DataGraph &dout,
+        const DataGraph &dun,
+        bool useTriangle,
+        const Triangle &tri,
+        const Pattern &p,
+        EdgeID *outID,
+        EdgeID *unID,
+        EdgeID *reverseID,
+        EdgeID *startOffset,
+        VertexID *patternV,
+        VertexID *dataV,
+        bool *visited,
+        ui *pos,
+        VertexID *&tmp,
+        VertexID *allV,
+        ParallelProcessingMeta *pMeta
+);
+
+void executeTree(
+        const Tree &t,
+        const DataGraph &din,
+        const DataGraph &dout,
+        const DataGraph &dun,
+        bool useTriangle,
+        const Triangle &tri,
+        const Pattern &p,
+        HashTable *H,
+        EdgeID *outID,
+        EdgeID *unID,
+        EdgeID *reverseID,
+        EdgeID *startOffset,
+        VertexID *patternV,
+        VertexID *dataV,
+        bool *visited,
+        ui *pos,
+        VertexID *&tmp,
+        VertexID *allV,
+        ParallelProcessingMeta* pMeta
+);
+
 void executeTree(
         const Tree &t,
         const DataGraph &din,
@@ -254,6 +361,35 @@ void multiJoin(
         ui *sizeBounds,
         VertexID *&tmp,
         VertexID *allV
+);
+
+void multiJoin(
+        VertexID nID,
+        const Tree &t,
+        const std::vector<VertexID> &child,
+        VertexID ***candidates,
+        ui **candCounts,
+        HashTable *H,
+        const DataGraph &din,
+        const DataGraph &dout,
+        const DataGraph &dun,
+        const Triangle &tri,
+        const Pattern &p,
+        EdgeID *outID,
+        EdgeID *unID,
+        EdgeID *reverseID,
+        EdgeID **startOffsets,
+        VertexID **patternVs,
+        VertexID **dataVs,
+        bool **visits,
+        ui **poses,
+        ui **keyPoses,
+        ui *keyPosSizes,
+        ui *sizeBounds,
+        VertexID *&tmp,
+        VertexID *allV,
+        ui start,
+        ui end
 );
 
 void multiJoinT(
@@ -308,6 +444,35 @@ void multiJoinE(
         ui *sizeBounds,
         VertexID *&tmp,
         VertexID *allV
+);
+
+void multiJoinE(
+        VertexID nID,
+        const Tree &t,
+        const std::vector<VertexID> &child,
+        VertexID ***candidates,
+        ui **candCounts,
+        HashTable *H,
+        const DataGraph &din,
+        const DataGraph &dout,
+        const DataGraph &dun,
+        const Triangle &tri,
+        const Pattern &p,
+        EdgeID *outID,
+        EdgeID *unID,
+        EdgeID *reverseID,
+        EdgeID **startOffsets,
+        VertexID **patternVs,
+        VertexID **dataVs,
+        bool **visits,
+        ui **poses,
+        ui **keyPoses,
+        ui *keyPosSizes,
+        ui *sizeBounds,
+        VertexID *&tmp,
+        VertexID *allV,
+        ui start,
+        ui end
 );
 
 void multiJoinET(
@@ -365,6 +530,36 @@ void multiJoinWrapper(
         VertexID *allV
 );
 
+void multiJoinWrapper(
+        VertexID nID,
+        const Tree &t,
+        const std::vector<VertexID> &child,
+        VertexID ***candidates,
+        ui **candCounts,
+        HashTable *H,
+        const DataGraph &din,
+        const DataGraph &dout,
+        const DataGraph &dun,
+        bool useTriangle,
+        const Triangle &tri,
+        const Pattern &p,
+        EdgeID *outID,
+        EdgeID *unID,
+        EdgeID *reverseID,
+        EdgeID **startOffsets,
+        VertexID **patternVs,
+        VertexID **dataVs,
+        bool **visits,
+        ui **poses,
+        ui **keyPoses,
+        ui *keyPosSizes,
+        ui *sizeBounds,
+        VertexID *&tmp,
+        VertexID *allV,
+        ui start,
+        ui end
+);
+
 void multiJoinTree(
         const Tree &t,
         const DataGraph &din,
@@ -383,6 +578,27 @@ void multiJoinTree(
         bool **visited,
         VertexID *&tmp,
         VertexID *allV
+);
+
+void multiJoinTree(
+        const Tree &t,
+        const DataGraph &din,
+        const DataGraph &dout,
+        const DataGraph &dun,
+        bool useTriangle,
+        const Triangle &tri,
+        const Pattern &p,
+        HashTable *H,
+        EdgeID *outID,
+        EdgeID *unID,
+        EdgeID *reverseID,
+        EdgeID **startOffset,
+        VertexID **patternV,
+        VertexID **dataV,
+        bool **visited,
+        VertexID *&tmp,
+        VertexID *allV,
+        ParallelProcessingMeta *pMeta
 );
 
 void executeSharedNode(
@@ -618,5 +834,126 @@ void executeForest(Forest &f, std::vector<HashTable> &result, const DataGraph &d
                    std::vector<HashTable> &allocatedHashTable, EdgeID *outID, EdgeID *unID, EdgeID *reverseID,
                    EdgeID *startOffset, VertexID *patternV, VertexID *dataV, bool *visited, ui *candPos,
                    VertexID *&tmp, VertexID *allV, specialsparse *sg, VertexID *cliqueVertices);
+
+
+class ExecutePartitionWorker {
+public:
+        ParallelProcessingMeta *pMeta;
+        const Tree &t;
+        const std::vector<std::vector<VertexID>> &globalOrder;
+        const std::vector<std::vector<std::vector<VertexID>>> &nodesAtStep;
+        const std::vector<VertexID> &partitionOrder;
+        const std::vector<std::vector<VertexID>> &child;
+        const std::vector<VertexID> &postOrder;
+        const std::vector<int> &partitionPos;
+        const std::vector<std::vector<int>> &partitionInPos;
+        const std::vector<std::vector<int>> &partitionOutPos;
+        const std::vector<std::vector<int>> &partitionUnPos;
+        const std::vector<bool> &partitionInterPos;
+        const std::vector<std::vector<int>> &greaterPos;
+        const std::vector<std::vector<int>> &lessPos;
+        const std::vector<bool> &partitionCandPos;
+        const std::vector<std::pair<int, int>> &partitionTriPos;
+        const std::vector<int> &triEdgeType;
+        const std::vector<int> &triEndType;
+        EdgeID *inOffset;
+        VertexID *inNbors;
+        EdgeID *outOffset;
+        VertexID *outNbors;
+        EdgeID *unOffset;
+        EdgeID *unNbors;
+        const DataGraph &din;
+        const DataGraph &dout;
+        const DataGraph &dun;
+        bool useTriangle;
+        const Triangle &tri;
+        EdgeID *outID;
+        EdgeID *unID;
+        EdgeID *reverseID;
+        VertexID pID;
+        const Pattern &p;
+        const std::vector<std::vector<VertexID>> &allChild;
+        int endPos;
+        bool isRoot;
+        VertexID *allV;
+
+        ExecutePartitionWorker(
+                ParallelProcessingMeta *pMeta,
+                const Tree &t,
+                const std::vector<std::vector<VertexID>> &globalOrder,
+                const std::vector<std::vector<std::vector<VertexID>>> &nodesAtStep,
+                const std::vector<VertexID> &partitionOrder,
+                const std::vector<std::vector<VertexID>> &child,
+                const std::vector<VertexID> &postOrder,
+                const std::vector<int> &partitionPos,
+                const std::vector<std::vector<int>> &partitionInPos,
+                const std::vector<std::vector<int>> &partitionOutPos,
+                const std::vector<std::vector<int>> &partitionUnPos,
+                const std::vector<bool> &partitionInterPos,
+                const std::vector<std::vector<int>> &greaterPos,
+                const std::vector<std::vector<int>> &lessPos,
+                const std::vector<bool> &partitionCandPos,
+                const std::vector<std::pair<int, int>> &partitionTriPos,
+                const std::vector<int> &triEdgeType,
+                const std::vector<int> &triEndType,
+                EdgeID *inOffset,
+                VertexID *inNbors,
+                EdgeID *outOffset,
+                VertexID *outNbors,
+                EdgeID *unOffset,
+                EdgeID *unNbors,
+                const DataGraph &din,
+                const DataGraph &dout,
+                const DataGraph &dun,
+                bool useTriangle,
+                const Triangle &tri,
+                EdgeID *outID,
+                EdgeID *unID,
+                EdgeID *reverseID,
+                VertexID pID,
+                const Pattern &p,
+                const std::vector<std::vector<VertexID>> &allChild,
+                int endPos,
+                bool isRoot,
+                VertexID *allV
+        );
+
+        ~ExecutePartitionWorker();
+
+        void operator()(ui start, ui end, int depth);
+};
+
+class ExecuteMultiJoinWorker {
+public:
+        ParallelProcessingMeta *pMeta;
+        const Tree &t;
+        const DataGraph &din;
+        const DataGraph &dout;
+        const DataGraph &dun;
+        const bool useTriangle;
+        const Triangle &tri;
+        const Pattern &p;
+        EdgeID *outID;
+        EdgeID *unID;
+        EdgeID *reverseID;
+        VertexID *allV;
+
+        ExecuteMultiJoinWorker(
+                ParallelProcessingMeta *pMeta,
+                const Tree &t,
+                const DataGraph &din,
+                const DataGraph &dout,
+                const DataGraph &dun,
+                const bool useTriangle,
+                const Triangle &tri,
+                const Pattern &p,
+                EdgeID *outID,
+                EdgeID *unID,
+                EdgeID *reverseID,
+                VertexID *allV
+        );
+        ~ExecuteMultiJoinWorker();
+        void operator()(ui start, ui end);
+};
 
 #endif //SCOPE_EXECUTION_H

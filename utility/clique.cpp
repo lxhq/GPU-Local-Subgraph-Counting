@@ -272,7 +272,7 @@ void mkspecial(specialsparse *g, unsigned char k) {
     ind = (int *)malloc(g->n * sizeof(int));
     memset(ind, -1, g->n * sizeof(int));
     loc = (int *)malloc(max * sizeof(int));
-    dsub_cpu = (unsigned *)calloc(max, sizeof(unsigned));
+    dsub = (unsigned *)calloc(max, sizeof(unsigned));
     Index = (unsigned *)malloc(max * sizeof(unsigned));
     color = (int *)malloc(max * sizeof(int));
     cd0 = (unsigned *)malloc((max + 1) * sizeof(unsigned));
@@ -392,7 +392,7 @@ void kclique(int l, int K, specialsparse *g, unsigned *vertices, HashTable h, in
                 {
                     ind[v] = ++cnt;
                     loc[cnt] = v;
-                    dsub_cpu[cnt] = 0;
+                    dsub[cnt] = 0;
                 }
                 end = g->cd[v] + g->d[l][v];
                 for (k = g->cd[v]; k < end; k++)
@@ -404,11 +404,11 @@ void kclique(int l, int K, specialsparse *g, unsigned *vertices, HashTable h, in
                         {
                             ind[w] = ++cnt;
                             loc[cnt] = w;
-                            dsub_cpu[cnt] = 0;
+                            dsub[cnt] = 0;
                         }
                         edge_num++;
-                        dsub_cpu[ind[v]]++;
-                        dsub_cpu[ind[w]]++;
+                        dsub[ind[v]]++;
+                        dsub[ind[w]]++;
                     }
                 }
 
@@ -417,10 +417,10 @@ void kclique(int l, int K, specialsparse *g, unsigned *vertices, HashTable h, in
 
             cd0[0] = 0;
             for (int i = 1; i < g->ns[l - 1] + 1; i++) {
-                cd0[i] = cd0[i - 1] + dsub_cpu[i - 1];
+                cd0[i] = cd0[i - 1] + dsub[i - 1];
                 ig[i - 1].id = i - 1;
-                ig[i - 1].degree = dsub_cpu[i - 1];
-                dsub_cpu[i - 1] = 0;
+                ig[i - 1].degree = dsub[i - 1];
+                dsub[i - 1] = 0;
             }
 
             for (j = 0; j < g->ns[l - 1]; j++)
@@ -433,8 +433,8 @@ void kclique(int l, int K, specialsparse *g, unsigned *vertices, HashTable h, in
                     w = g->adj[k];
                     if (g->lab[w] == l - 1)
                     {
-                        adj0[cd0[ind[v]] + dsub_cpu[ind[v]]++] = ind[w];
-                        adj0[cd0[ind[w]] + dsub_cpu[ind[w]]++] = ind[v];
+                        adj0[cd0[ind[v]] + dsub[ind[v]]++] = ind[w];
+                        adj0[cd0[ind[w]] + dsub[ind[w]]++] = ind[v];
                     }
                 }
             }

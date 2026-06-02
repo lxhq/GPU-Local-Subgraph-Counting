@@ -424,14 +424,14 @@ PatternGraph& PatternGraph::operator=(const PatternGraph &rhs) {
     if (rhs._coreV == nullptr)
         _coreV = nullptr;
     else {
-        delete _coreV;
+        delete[] _coreV;
         _coreV = new VertexID[_coreSize];
         memcpy(_coreV, rhs._coreV, sizeof(VertexID) * _coreSize);
     }
     if (rhs._peripheralV == nullptr)
         _peripheralV = nullptr;
     else {
-        delete _peripheralV;
+        delete[] _peripheralV;
         ui peripheralSize = _numVertices - _coreSize;
         _peripheralV = new VertexID[peripheralSize];
         memcpy(_peripheralV, rhs._peripheralV, sizeof(VertexID) * peripheralSize);

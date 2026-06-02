@@ -65,7 +65,7 @@ typedef struct {
 static iddegree *ig;
 static specialsparse *subg;
 static int *color, *ind, *loc, *C;
-static unsigned *cd0, *adj0, *dsub_cpu, *Index;
+static unsigned *cd0, *adj0, *dsub, *Index;
 
 int cmp(const void* a, const void* b);
 int cmpadj(const void* a, const void* b);

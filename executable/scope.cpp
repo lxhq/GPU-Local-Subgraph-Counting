@@ -4,35 +4,8 @@
 
 #include "command.h"
 #include "execution.h"
-#include "execution_gpu.h"
-
-void printKernelFunctionInformation(const void* kernelFunc) {
-    int numBlocksPerSM = 0;
-    cudaError_t status = cudaOccupancyMaxActiveBlocksPerMultiprocessor(
-        &numBlocksPerSM,
-        kernelFunc,
-        BLOCK_DIM,
-        0
-    );
-    if (status != cudaSuccess) {
-        std::cout << "cudaOccupancyMaxActiveBlocksPerMultiprocessor failed: %s\n", cudaGetErrorString(status);
-        exit(1);
-    }
-    int maxActiveThreadsPerSM = numBlocksPerSM * BLOCK_DIM;
-    int maxActiveWarpsPerSM   = (maxActiveThreadsPerSM + 31) / 32;  // round up
-
-    cudaFuncAttributes attr;
-    status = cudaFuncGetAttributes(&attr, kernelFunc);
-    if (status != cudaSuccess) {
-        std::cout << "cudaFuncGetAttributes failed: %s\n", cudaGetErrorString(status);
-        exit(1);
-    }
-    std::cout << "Kernel uses " << attr.numRegs << " registers per thread." << std::endl;
-    std::cout << "Kernel uses " << TO_KB(attr.sharedSizeBytes) << " KB of static shared memory per block." << std::endl;
-    std::cout << "Max active blocks per SM: " << numBlocksPerSM << std::endl;
-    std::cout << "Max active threads per SM: " << maxActiveThreadsPerSM << std::endl;
-    std::cout << "Max active warps per SM: " << maxActiveWarpsPerSM << std::endl;
-}
+#include "Pexecution.h"
+#include <malloc.h>
 
 int main(int argc, char **argv) {
     Command cmd(argc, argv);
@@ -43,9 +16,16 @@ int main(int argc, char **argv) {
     bool batchQuery = cmd.getBatchQuery();
     bool shareNode = cmd.getShareNode();
     bool useTriangle = !trianglePath.empty();
-    float ratio = cmd.getRatio();
-    uint32_t prob_limit = cmd.getProbLimit();
-    uint32_t memory_pool_size = cmd.getMemoryPoolSize();
+    std::string mode = cmd.getExecutionMode();
+    if (mode != "single" && mode != "parallel") {
+        std::cerr << "Invalid mode: " << mode << std::endl;
+        exit(1);
+    }
+    ui num_threads = cmd.getNumThreads();
+    ui node_partition_size = cmd.getNodePartitionSize();
+    ui prefix_partition_size = cmd.getPrefixPartitionSize();
+    // ui patterns_parallel_size = cmd.getPatternsParallelSize();
+
     std::cout << "query graph path: " << queryGraphPath << std::endl;
     std::cout << "data graph path: " << dataGraphPath << std::endl;
     std::cout << "result path: " << resultPath << std::endl;
@@ -53,10 +33,13 @@ int main(int argc, char **argv) {
     std::cout << "sharing nodes computation: " << shareNode << std::endl;
     std::cout << "using triangle: " << useTriangle << std::endl;
     std::cout << "set intersection type: " << SI << std::endl;
-    std::cout << "max memory pool size: " << memory_pool_size << " GB" << std::endl;
-    std::cout << "subgraph matching hashtable ratio: " << ratio << std::endl;
-    std::cout << "prob limit: " << prob_limit << std::endl;
-    std::cout << "hash table type: " << HASH_TABLE_TYPE << std::endl;
+    std::cout << "mode: " << mode << std::endl;
+    if (mode == "parallel") {
+        std::cout << "number of threads: " << num_threads << std::endl;
+        std::cout << "node partition size: " << node_partition_size << std::endl;
+        std::cout << "prefix partition size: " << prefix_partition_size << std::endl;
+        // std::cout << "patterns parallel size: " << patterns_parallel_size << std::endl;
+    }
     DataGraph dun = DataGraph();
     dun.loadDataGraph(dataGraphPath);
     const DataGraph din = constructDirectedDataGraph(dun, false);
@@ -100,17 +83,19 @@ int main(int argc, char **argv) {
     // candPos is for each pattern vertex
     // elements in candPos is a pointer points to the current matched data vertex candidate in the candidate list
     // candPos[mappingSize] points to a data vertex in the candidate[nodeID][mappingSize] array to be matched
+    // candPos is used for paratition prefix
+    // startoffset is used for node enumeration
     ui *candPos = new ui[MAX_PATTERN_SIZE];
     memset(candPos, 0, sizeof(ui) * (MAX_PATTERN_SIZE));
     // patternV, dataV, startOffset are designed that for each tree node and for each pattern vertex
     // patternV is the current matching query vertex id
     // dataV is the current matched data vertex id (embedding_)
-    // startOffset records the start position of the candidate in the data graph's offset array, used for computing the edge id for edge orbit case
-    // visited is for each tree node and for each data vertex
-    // for executedTree, only patternV[0], dataV[0], startOffset[0] and visited[0] are used
+    // startOffset records the start position of the candidate in the data graph's offset array
+    // for executedTree, only patternV[0] and dataV[0] are used
     VertexID **patternV = new VertexID *[MAX_NUM_NODE];
     VertexID **dataV = new VertexID *[MAX_NUM_NODE];
     EdgeID **startOffset = new EdgeID *[MAX_NUM_NODE];
+    //visited is for each tree node and for each data vertex
     bool **visited = new bool *[MAX_NUM_NODE];
     for (int i = 0; i < MAX_NUM_NODE; ++i) {
         patternV[i] = new VertexID[MAX_PATTERN_SIZE];
@@ -134,92 +119,11 @@ int main(int argc, char **argv) {
     ui totalNumPatterns = 0, totalNodes = 0;
     double averageNodeSize = 0.0;
     int numVertexTable = 0, numEdgeTable = 0;
-
-    /************************** Initlize GPU  ******************************/
-    /****************** print device information *************/
-    uint32_t gpu_num = 0u;
-    cudaSetDevice(gpu_num);
-    cudaDeviceProp prop;
-    cudaGetDeviceProperties(&prop, gpu_num);
-    std::cout << std::endl;
-    std::cout << "Device ID: " << gpu_num << std::endl;
-    std::cout << "Device Name: " << prop.name << std::endl;
-    std::cout << "Compute Capability: " << prop.major << "." << prop.minor << std::endl;
-    std::cout << "Number of SMs: " << prop.multiProcessorCount << std::endl;
-    std::cout << "L2 Cache Size: " << TO_MB(prop.l2CacheSize) << " MB" << std::endl;
-    std::cout << "Total Global Memory: " << TO_GB(prop.totalGlobalMem) << " GB" << std::endl;
-    std::cout << "Registers Per SM: " << prop.regsPerMultiprocessor << std::endl;
-    std::cout << "Shared Memory Per SM: " << TO_KB(prop.sharedMemPerMultiprocessor) << " KB" << std::endl;
-    std::cout << "Max blocks Per SM: " << prop.maxBlocksPerMultiProcessor << std::endl;
-    std::cout << "Max threads Per SM: " << prop.maxThreadsPerMultiProcessor << std::endl;
-    std::cout << "Memory Bus Width: " << prop.memoryBusWidth << " bits" << std::endl;
-    std::cout << "Memory Clock Rate: " << prop.memoryClockRate << " KHz" << std::endl;
-    std::cout << "Memory Bandwidth: " << (prop.memoryClockRate * (uint64_t)prop.memoryBusWidth * 1000 * 2) / 8e9 << " GB/s" << std::endl;
-    std::cout << "Warp Size: " << prop.warpSize << std::endl;
-    std::cout << "Constant Memory: " << TO_KB(prop.totalConstMem) << " KB" << std::endl;
-    std::cout << "Max Grid Size: " << prop.maxGridSize[0] << " x " << prop.maxGridSize[1] << " x " << prop.maxGridSize[2] << std::endl;
-    std::cout << "Shared Memory Per Block: " << TO_KB(prop.sharedMemPerBlock) << " KB" << std::endl;
-    std::cout << "Registers Per Block: " << prop.regsPerBlock << std::endl;
-    std::cout << "Max threads Per Block: " << prop.maxThreadsPerBlock << std::endl;
-    std::cout << "Size of NodeGPU: " << sizeof(NodeGPU) << std::endl;
-    std::cout << std::endl;
-    if (prop.warpSize != WARP_SIZE) {
-        throw std::runtime_error("warp size is not 32");
+    tbb::global_control control(tbb::global_control::max_allowed_parallelism, num_threads);
+    ParallelProcessingMeta *pMeta = nullptr;
+    if (mode == "parallel") {
+        pMeta = new ParallelProcessingMeta(num_threads, node_partition_size, prefix_partition_size, din, dout, dun);
     }
-
-    /****************** print kernel functions information *************/
-    std::cout << "countKernel" << std::endl;
-    printKernelFunctionInformation(reinterpret_cast<const void*>(countKernel));
-    std::cout << std::endl;
-
-    std::cout << "writeKernel" << std::endl;
-    printKernelFunctionInformation(reinterpret_cast<const void*>(writeKernel));
-    std::cout << std::endl;
-
-    std::cout << "finalLevelWithLocalCacheKernel" << std::endl;
-    printKernelFunctionInformation(reinterpret_cast<const void*>(finalLevelWithLocalCacheKernel));
-    std::cout << std::endl;
-
-    std::cout << "finalLevelWithEdgeWithLocalCacheKernel" << std::endl;
-    printKernelFunctionInformation(reinterpret_cast<const void*>(finalLevelWithEdgeWithLocalCacheKernel));
-    std::cout << std::endl;
-
-    std::cout << "writeToHashTableKernel" << std::endl;
-    printKernelFunctionInformation(reinterpret_cast<const void*>(writeToHashTableKernel));
-    std::cout << std::endl;
-
-    std::cout << "writeToHashTableWithEdgeKeyKernel" << std::endl;
-    printKernelFunctionInformation(reinterpret_cast<const void*>(writeToHashTableWithEdgeKeyKernel));
-    std::cout << std::endl;
-
-    std::cout << std::endl;
-    /****************** allocate the device memory ***********/
-    if (memory_pool_size == 0) {
-        // Get the memory info from the GPU
-        size_t free_byte, total_byte;
-        cudaError_t status = cudaMemGetInfo(&free_byte, &total_byte);
-        memory_pool_size = TO_GB(free_byte * 0.9);
-        std::cout << "Memory pool (-mem) not set. Allocating 90% of total free device memory: "
-              << memory_pool_size << " GB (Total Free Memory: " << TO_GB(free_byte) << " GB)" << std::endl;
-    } else {
-        if (memory_pool_size > TO_GB(prop.totalGlobalMem)) {
-            throw std::runtime_error("not enough GPU memory, preset: " + std::to_string(memory_pool_size) + ", actual: " + std::to_string(TO_GB(prop.totalGlobalMem)));
-        }
-    }
-
-    MEM_INIT();
-    PRINT_MEM_INFO("Before Allocation");
-    MemoryManager memory_manager(static_cast<uint64_t>(memory_pool_size) * 1024 * 1024 * 1024);
-    PRINT_MEM_INFO("After allocation");
-    std::cout << std::endl;
-
-    // copy data graphs to device memory
-    // copy outID, inID, reverseID to device memory
-    copyMetaToGPU(din, dout, dun, outID, unID, reverseID, memory_manager);
-
-    memory_manager.printMemoryUsage();
-    /************************** End of initlize GPU ************************/
-    
     if (!shareNode) {
         std::vector<HashTable> mathCalH(patternGraphs.size());
         std::vector<int> orbitTypes(patternGraphs.size());
@@ -234,8 +138,6 @@ int main(int argc, char **argv) {
             start = std::chrono::steady_clock::now();
             ConNode cn;
             // if (!patternGraphs[i].isClique()) {
-                // set useDirected to false to make things easier
-                // I cannot understand the decomposed tree produced with useDirected = true
                 genEquation(patternGraphs[i], patterns, trees, cn, useTriangle, true, true, true);
             // }
             end = std::chrono::steady_clock::now();
@@ -301,9 +203,15 @@ int main(int argc, char **argv) {
                             for (int l = 0; l < trees[divideFactor][j][0].getNumNodes(); ++l) {
                                 memset(ht[l], 0, sizeof(Count) * m);
                             }
+                            if (mode == "parallel") {
+                                for (int i = 0; i < pMeta->_num_threads; i++) {
+                                    for (int l = 0; l < trees[divideFactor][j][0].getNumNodes(); ++l) {
+                                        memset(pMeta->_total_hash_table[i][l], 0, sizeof(Count) * (m));
+                                    }
+                                }
+                            }
                             int k = patterns[divideFactor][j].u.getNumVertices();
-// TODO: 
-                            if (patterns[divideFactor][j].u.isClique() && k >= 10) {
+                            if (patterns[divideFactor][j].u.isClique() && k >= 20) {
                                 HashTable h = ht[trees[divideFactor][j][j2].getRootID()];
                                 int aggreWeight = trees[divideFactor][j][j2].getAggreWeight()[0];
                                 mkspecial(sg, k);
@@ -323,50 +231,27 @@ int main(int argc, char **argv) {
                             }
                             else {
                                 const Tree &t = trees[divideFactor][j][j2];
-/********** Debug *******/
-// patterns[divideFactor][j].u.printGraph();
-// t.print();
-// bool hasEdgeKey = false;
-// for (int er = 0; er < t.getNumNodes(); ++er) {
-//     if (t.nodeEdgeKey(er)) {
-//         hasEdgeKey = true;
-//         break;
-//     }
-// }
-// if (hasEdgeKey) {
-//     std::cout << "File " << files[i] << " has edge key" << std::endl;
-// }
-// continue;
-/********** Debug *******/
                                 if (t.getExecuteMode()) {
-                                    // executeTree(t, din, dout, dun, useTriangle, triangle, patterns[divideFactor][j],
-                                    //             ht, outID, unID, reverseID, startOffset[0], patternV[0], dataV[0],
-                                    //             visited[0], candPos, tmp, allV);
-                                    // auto start = std::chrono::steady_clock::now();
-                                    executeTreeGPU(t, dun, ht, memory_manager, prob_limit, ratio);
-                                    // auto end = std::chrono::steady_clock::now();
-                                    // std::chrono::duration<double> elapsedSeconds = end - start;
-                                    // std::cout << "execution time: " << elapsedSeconds.count() << "s" << std::endl << std::endl;
+                                    if (mode == "single") {
+                                        executeTree(t, din, dout, dun, useTriangle, triangle, patterns[divideFactor][j],
+                                                ht, outID, unID, reverseID, startOffset[0], patternV[0], dataV[0], visited[0], candPos, tmp, allV);
+                                    } else {
+                                       executeTree(t, din, dout, dun, useTriangle, triangle, patterns[divideFactor][j],
+                                                ht, outID, unID, reverseID, startOffset[0], patternV[0], dataV[0], visited[0], candPos, tmp, allV, pMeta); 
+                                    }
                                 }
                                 else {
-                                    // multiJoinTree(t, din, dout, dun, useTriangle, triangle, patterns[divideFactor][j],
-                                    //             ht, outID, unID, reverseID, startOffset, patternV, dataV, visited, tmp, allV);
-                                    multiJoinTreeGPU(t, dun, ht, memory_manager, prob_limit, ratio);
+                                    if (mode == "single") {
+                                        multiJoinTree(t, din, dout, dun, useTriangle, triangle, patterns[divideFactor][j],
+                                                    ht, outID, unID, reverseID, startOffset, patternV, dataV, visited, tmp, allV);
+                                    } else {
+                                        multiJoinTree(t, din, dout, dun, useTriangle, triangle, patterns[divideFactor][j],
+                                                    ht, outID, unID, reverseID, startOffset, patternV, dataV, visited, tmp, allV, pMeta);
+                                    }
                                 }
                             }
                             // ht is the cout for each node. here h is the count for the root node
                             HashTable h = ht[trees[divideFactor][j][j2].getRootID()];
-/********** Debug *******/
-// print out the content of the hash table
-// int64_t sum = 0;
-// for (VertexID l = 1; l < n; ++l) {
-//     // std::cout << h[l] << " ";
-//     sum += h[l];
-// }
-// std::cout<<"sum: "<<sum<<std::endl;
-// std::cout<<std::endl;
-// exit(0);
-/********** Debug *******/
                             int multiFactor = trees[divideFactor][j][j2].getMultiFactor();
                             if (!resultPath.empty()) {
                                 if (orbitType == 0) factorSum[0] += h[0];
@@ -421,11 +306,11 @@ int main(int argc, char **argv) {
             ui numPatterns = 0;
             for (auto it = patterns.begin(); it != patterns.end(); ++it)
                 numPatterns += it->second.size();
-            std::cout << ", number of patterns: " << numPatterns;
-            std::cout << ", current average batch size: " << global_running_avg << std::endl;
+            std::cout << ", number of patterns: " << numPatterns << std::endl;
             totalExeTime += exeTime;
             totalNumPatterns += numPatterns;
             mathCalH[i] = H;
+            malloc_trim(0);
         }
         if (!resultPath.empty()) saveCount(resultPath, mathCalH, dun, batchQuery, files, orbitTypes);
         for (int i = 0; i < patternGraphs.size(); ++i)
@@ -441,7 +326,6 @@ int main(int argc, char **argv) {
                   << "number of vertex hash tables (except for root node): " << numVertexTable
                   << ", number of edge hash tables (except for root node): " << numEdgeTable << std::endl;
         std::cout << "number of match: " << gNumMatch << ", number of intersect: " << gNumIntersect << std::endl;
-        std::cout << "total average batch size: " << global_running_avg << std::endl;
     }
 
     if (shareNode) {
@@ -795,6 +679,28 @@ int main(int argc, char **argv) {
         std::vector<int> orbitTypes(files.size(), orbitType);
         if (!resultPath.empty()) saveCount(resultPath, result, dun, batchQuery, files, orbitTypes);
     }
+
+    delete[] reverseID;
+    delete[] outID;
+    delete[] unID;
+    delete[] sg;
+    delete[] cliqueVertices;
+    delete[] tmp;
+    delete[] allV;
+    for (auto & h: ht)
+        delete[] h;
+    delete [] factorSum;
+    for (int i = 0; i < MAX_NUM_NODE; ++i) {
+        delete[] patternV[i];
+        delete[] dataV[i];
+        delete[] startOffset[i];
+        delete[] visited[i];
+    }
+    delete[] patternV;
+    delete[] dataV;
+    delete[] startOffset;
+    delete[] visited;
+    delete[] candPos;
 
     return 0;
 }

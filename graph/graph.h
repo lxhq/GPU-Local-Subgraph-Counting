@@ -115,7 +115,7 @@ private:
     int _autoSize;                  // number of automorphisms
     int _divideFactor;              // _autoSize / auto group size of vertex 0 / edge (0,1)
     int *_v2o;                      // the canonical orbits of vertices in this node
-    VertexID *_v2l;                 // the canonical labeling of vertices in this node, _v2l[3] = 0: the original label/id of canon lable 3 is 0
+    VertexID *_v2l;                 // the canonical labeling of vertices in this node
     std::vector<std::vector<std::vector<VertexID>>> _candidateRules;
 
 public:
