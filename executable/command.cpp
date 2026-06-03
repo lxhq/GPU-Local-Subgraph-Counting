@@ -11,8 +11,12 @@ Command::Command(int argc, char **argv) : CommandParser(argc, argv){
     optionsKey[OptionKeyword::ResultPath] = "-r";
     optionsKey[OptionKeyword::ShareNode] = "-share";
     optionsKey[OptionKeyword::TrianglePath] = "-t";
+    optionsKey[OptionKeyword::MatchOnly] = "-match-only";
+    optionsKey[OptionKeyword::ProfileReset] = "-profile-reset";
     booleanOptionValue[OptionKeyword::BatchQuery] = false;
     booleanOptionValue[OptionKeyword::ShareNode] = false;
+    booleanOptionValue[OptionKeyword::MatchOnly] = false;
+    booleanOptionValue[OptionKeyword::ProfileReset] = false;
     optionsKey[OptionKeyword::ExecutionMode] = "-m";
     optionsKey[OptionKeyword::NumThreads] = "-n";
     optionsKey[OptionKeyword::NodePartitionSize] = "-np";
@@ -28,6 +32,8 @@ void Command::processOptions() {
     optionsValue[OptionKeyword::ResultPath] = getCommandOption(optionsKey[OptionKeyword::ResultPath]);
     booleanOptionValue[OptionKeyword::BatchQuery] = commandOptionExists(optionsKey[OptionKeyword::BatchQuery]);
     booleanOptionValue[OptionKeyword::ShareNode] = commandOptionExists(optionsKey[OptionKeyword::ShareNode]);
+    booleanOptionValue[OptionKeyword::MatchOnly] = commandOptionExists(optionsKey[OptionKeyword::MatchOnly]);
+    booleanOptionValue[OptionKeyword::ProfileReset] = commandOptionExists(optionsKey[OptionKeyword::ProfileReset]);
     optionsValue[OptionKeyword::ExecutionMode] = getCommandOption(optionsKey[OptionKeyword::ExecutionMode]);
     if (optionsValue[OptionKeyword::ExecutionMode].empty()) {
         optionsValue[OptionKeyword::ExecutionMode] = "parallel";

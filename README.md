@@ -87,6 +87,8 @@ We preprocessed the data graphs in our experiments by indexing triangles as a si
 | -r     | the result path (single query) or directory (batch query), optional |
 | -b     | with -b: batch query, without -b: single query               |
 | -n     | number of worker threads. The default is 20 |
+| -match-only | run subgraph enumeration only, without table-reset and join-aggregation operations |
+| -profile-reset | run normal execution and report table-reset timing |
 
 Example:
 
@@ -98,6 +100,60 @@ Example:
 These commands run SCOPE-MT with 20 threads, which is also the default thread count.
 
 In the output, the $i$-th line shows the local subgraph count of the data node $i-1$.
+
+### Time-Breakdown Profiling
+
+The following options are intended for reproducing the SCOPE-MT component-level time-breakdown experiments. They are disabled by default for normal runs and are intended for the parallel, non-sharing execution path without triangle acceleration.
+
+| Option | Description |
+| --- | --- |
+| `-profile-reset` | Run normal execution and report CPU table-reset time, calls, and bytes in stdout. |
+| `-match-only` | Run without any table-reset and join-aggregation operations. |
+
+For the reported time breakdown, we use three timing sources.
+
+First, run the normal computation without profiling flags. This gives the clean per-query runtime:
+
+```shell
+./build/executable/scope.out \
+  -q ./exp/pattern_graph/5voc \
+  -d ./exp/data_graph/web-spam.txt \
+  -n 20 \
+  -b
+```
+
+Second, run the normal computation with reset profiling. This run is used to measure per-query table-reset time; its total runtime is not used as the clean total runtime in the reported breakdown:
+
+```shell
+./build/executable/scope.out \
+  -q ./exp/pattern_graph/5voc \
+  -d ./exp/data_graph/web-spam.txt \
+  -n 20 \
+  -b \
+  -profile-reset
+```
+
+Third, run match-only mode to measure subgraph enumeration without table reset or join aggregation:
+
+```shell
+./build/executable/scope.out \
+  -q ./exp/pattern_graph/5voc \
+  -d ./exp/data_graph/web-spam.txt \
+  -n 20 \
+  -b \
+  -match-only
+```
+
+The component times are computed as:
+
+```text
+Total = sum of per-query execution times from the clean normal run
+SM    = sum of per-query execution times from the match-only run
+Reset = sum of per-query reset wall-time estimates from the profile-reset run
+JA    = Total - SM - Reset
+```
+
+Unlike GPU-SCOPE-LF, SCOPE-MT does not use adaptive GPU batch schedules, so no batch-schedule record/replay step is needed for this CPU time-breakdown measurement.
 
 ### batch.out
 

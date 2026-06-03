@@ -11,7 +11,14 @@ ParallelProcessingMeta::ParallelProcessingMeta(
     _node_partition_size(node_partition_size),
     _prefix_partition_size(prefix_partition_size),
     _thread_id_ets(-1),
-    _next_thread_id(0) {
+    _next_thread_id(0),
+    _profile_reset(false),
+    _reset_serial_time(0.0),
+    _reset_serial_calls(0),
+    _reset_sparse_calls(0),
+    _reset_full_calls(0),
+    _reset_sparse_entries(0),
+    _reset_full_bytes(0) {
     
     ui n = dun.getNumVertices(), m = dun.getNumEdges();
 
@@ -23,6 +30,8 @@ ParallelProcessingMeta::ParallelProcessingMeta(
     _dataV = new ui**[num_threads];
     _patternV = new ui**[num_threads];
     _total_parallel_node_pos = new ui*[num_threads];
+    _reset_thread_time = new double[num_threads];
+    std::fill(_reset_thread_time, _reset_thread_time + num_threads, 0.0);
 
     // allocate memory for each thread
     for (ui i = 0; i < num_threads; i++) {
@@ -75,6 +84,86 @@ ParallelProcessingMeta::~ParallelProcessingMeta() {
     delete [] _dataV;
     delete [] _patternV;
     delete [] _total_parallel_node_pos;
+    delete [] _reset_thread_time;
+}
+
+void ParallelProcessingMeta::setResetProfile(bool enabled) {
+    _profile_reset = enabled;
+}
+
+bool ParallelProcessingMeta::profileReset() const {
+    return _profile_reset;
+}
+
+void ParallelProcessingMeta::resetResetProfile() {
+    _reset_serial_time = 0.0;
+    _reset_serial_calls.store(0);
+    _reset_sparse_calls.store(0);
+    _reset_full_calls.store(0);
+    _reset_sparse_entries.store(0);
+    _reset_full_bytes.store(0);
+    std::fill(_reset_thread_time, _reset_thread_time + _num_threads, 0.0);
+}
+
+void ParallelProcessingMeta::addResetProfileSample(int threadID, double seconds, bool sparse, uint64_t entries, uint64_t bytes) {
+    if (!_profile_reset) return;
+    if (threadID >= 0 && threadID < (int)_num_threads) {
+        _reset_thread_time[threadID] += seconds;
+    }
+    else {
+        _reset_serial_time += seconds;
+        _reset_serial_calls.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (sparse) {
+        _reset_sparse_calls.fetch_add(1, std::memory_order_relaxed);
+        _reset_sparse_entries.fetch_add(entries, std::memory_order_relaxed);
+    }
+    else {
+        _reset_full_calls.fetch_add(1, std::memory_order_relaxed);
+        _reset_full_bytes.fetch_add(bytes, std::memory_order_relaxed);
+    }
+}
+
+double ParallelProcessingMeta::getResetSerialTime() const {
+    return _reset_serial_time;
+}
+
+double ParallelProcessingMeta::getResetThreadSumTime() const {
+    double total = 0.0;
+    for (ui i = 0; i < _num_threads; ++i) total += _reset_thread_time[i];
+    return total;
+}
+
+double ParallelProcessingMeta::getResetThreadMaxTime() const {
+    double maxTime = 0.0;
+    for (ui i = 0; i < _num_threads; ++i) {
+        if (_reset_thread_time[i] > maxTime) maxTime = _reset_thread_time[i];
+    }
+    return maxTime;
+}
+
+double ParallelProcessingMeta::getResetWallTimeEstimate() const {
+    return getResetSerialTime() + getResetThreadMaxTime();
+}
+
+uint64_t ParallelProcessingMeta::getResetSerialCalls() const {
+    return _reset_serial_calls.load(std::memory_order_relaxed);
+}
+
+uint64_t ParallelProcessingMeta::getResetSparseCalls() const {
+    return _reset_sparse_calls.load(std::memory_order_relaxed);
+}
+
+uint64_t ParallelProcessingMeta::getResetFullCalls() const {
+    return _reset_full_calls.load(std::memory_order_relaxed);
+}
+
+uint64_t ParallelProcessingMeta::getResetSparseEntries() const {
+    return _reset_sparse_entries.load(std::memory_order_relaxed);
+}
+
+uint64_t ParallelProcessingMeta::getResetFullBytes() const {
+    return _reset_full_bytes.load(std::memory_order_relaxed);
 }
 
 void ParallelProcessingMeta::setCandidates(const Tree& t, const DataGraph& dout) {

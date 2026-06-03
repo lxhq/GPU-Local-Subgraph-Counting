@@ -20,6 +20,8 @@ enum OptionKeyword {
     NumThreads = 8,         // -n, number of threads
     NodePartitionSize = 9,  // -np, node partition size
     PrefixPartitionSize = 10, // -pp, prefix partition size
+    MatchOnly = 11,         // -match-only, dry run subgraph matching without aggregation writes
+    ProfileReset = 12,      // -profile-reset, normal execution with table reset timing
     // PatternsParallelSize = 11 // -patp, patterns parallel size
 };
 
@@ -58,6 +60,14 @@ public:
 
     bool getShareNode() {
         return booleanOptionValue[OptionKeyword::ShareNode];
+    }
+
+    bool getMatchOnly() {
+        return booleanOptionValue[OptionKeyword::MatchOnly];
+    }
+
+    bool getProfileReset() {
+        return booleanOptionValue[OptionKeyword::ProfileReset];
     }
 
     std::string getExecutionMode() {

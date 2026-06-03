@@ -20,6 +20,8 @@ extern Count gNumIntermediate;
 extern Count gNumEdgeID;
 extern Count gNumUpdate;
 
+void setResetProfileMeta(ParallelProcessingMeta *pMeta);
+
 // struct Task {
 // public:
 //         ui _start;
@@ -126,7 +128,8 @@ void executeNode(
         ui &keyPosSize,
         ui sizeBound,
         VertexID *&tmp,
-        VertexID *allV
+        VertexID *allV,
+        bool matchOnly = false
 );
 
 void executeNodeT(
@@ -184,7 +187,8 @@ void PexecuteNodeEdgeKey(
         ui sizeBound,
         VertexID *&tmp,
         VertexID *allV,
-        ParallelProcessingMeta *pMeta
+        ParallelProcessingMeta *pMeta,
+        bool matchOnly = false
 );
 
 void executeNodeEdgeKey(
@@ -212,7 +216,8 @@ void executeNodeEdgeKey(
         ui &keyPosSize,
         ui sizeBound,
         VertexID *&tmp,
-        VertexID *allV
+        VertexID *allV,
+        bool matchOnly = false
 );
 
 void executeNodeEdgeKeyT(
@@ -290,7 +295,8 @@ void executePartition(
         ui *pos,
         VertexID *&tmp,
         VertexID *allV,
-        ParallelProcessingMeta *pMeta
+        ParallelProcessingMeta *pMeta,
+        bool matchOnly = false
 );
 
 void executeTree(
@@ -312,7 +318,8 @@ void executeTree(
         ui *pos,
         VertexID *&tmp,
         VertexID *allV,
-        ParallelProcessingMeta* pMeta
+        ParallelProcessingMeta* pMeta,
+        bool matchOnly = false
 );
 
 void executeTree(
@@ -360,7 +367,8 @@ void multiJoin(
         ui *keyPosSizes,
         ui *sizeBounds,
         VertexID *&tmp,
-        VertexID *allV
+        VertexID *allV,
+        bool matchOnly = false
 );
 
 void multiJoin(
@@ -389,7 +397,8 @@ void multiJoin(
         VertexID *&tmp,
         VertexID *allV,
         ui start,
-        ui end
+        ui end,
+        bool matchOnly = false
 );
 
 void multiJoinT(
@@ -443,7 +452,8 @@ void multiJoinE(
         ui *keyPosSizes,
         ui *sizeBounds,
         VertexID *&tmp,
-        VertexID *allV
+        VertexID *allV,
+        bool matchOnly = false
 );
 
 void multiJoinE(
@@ -472,7 +482,8 @@ void multiJoinE(
         VertexID *&tmp,
         VertexID *allV,
         ui start,
-        ui end
+        ui end,
+        bool matchOnly = false
 );
 
 void multiJoinET(
@@ -527,7 +538,8 @@ void multiJoinWrapper(
         ui *keyPosSizes,
         ui *sizeBounds,
         VertexID *&tmp,
-        VertexID *allV
+        VertexID *allV,
+        bool matchOnly = false
 );
 
 void multiJoinWrapper(
@@ -557,7 +569,8 @@ void multiJoinWrapper(
         VertexID *&tmp,
         VertexID *allV,
         ui start,
-        ui end
+        ui end,
+        bool matchOnly = false
 );
 
 void multiJoinTree(
@@ -598,7 +611,8 @@ void multiJoinTree(
         bool **visited,
         VertexID *&tmp,
         VertexID *allV,
-        ParallelProcessingMeta *pMeta
+        ParallelProcessingMeta *pMeta,
+        bool matchOnly = false
 );
 
 void executeSharedNode(
@@ -876,6 +890,7 @@ public:
         int endPos;
         bool isRoot;
         VertexID *allV;
+        bool matchOnly;
 
         ExecutePartitionWorker(
                 ParallelProcessingMeta *pMeta,
@@ -915,7 +930,8 @@ public:
                 const std::vector<std::vector<VertexID>> &allChild,
                 int endPos,
                 bool isRoot,
-                VertexID *allV
+                VertexID *allV,
+                bool matchOnly = false
         );
 
         ~ExecutePartitionWorker();
@@ -937,6 +953,7 @@ public:
         EdgeID *unID;
         EdgeID *reverseID;
         VertexID *allV;
+        bool matchOnly;
 
         ExecuteMultiJoinWorker(
                 ParallelProcessingMeta *pMeta,
@@ -950,7 +967,8 @@ public:
                 EdgeID *outID,
                 EdgeID *unID,
                 EdgeID *reverseID,
-                VertexID *allV
+                VertexID *allV,
+                bool matchOnly = false
         );
         ~ExecuteMultiJoinWorker();
         void operator()(ui start, ui end);

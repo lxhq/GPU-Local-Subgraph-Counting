@@ -5,6 +5,7 @@
 #include "command.h"
 #include "execution.h"
 #include "Pexecution.h"
+#include <cstdint>
 #include <malloc.h>
 
 int main(int argc, char **argv) {
@@ -15,11 +16,44 @@ int main(int argc, char **argv) {
     std::string trianglePath = cmd.getTrianglePath();
     bool batchQuery = cmd.getBatchQuery();
     bool shareNode = cmd.getShareNode();
+    bool matchOnly = cmd.getMatchOnly();
+    bool profileReset = cmd.getProfileReset();
     bool useTriangle = !trianglePath.empty();
     std::string mode = cmd.getExecutionMode();
     if (mode != "single" && mode != "parallel") {
         std::cerr << "Invalid mode: " << mode << std::endl;
         exit(1);
+    }
+    if (matchOnly && mode != "parallel") {
+        std::cerr << "-match-only is currently supported for -m parallel only." << std::endl;
+        exit(1);
+    }
+    if (matchOnly && shareNode) {
+        std::cerr << "-match-only is currently supported for non-share mode only." << std::endl;
+        exit(1);
+    }
+    if (matchOnly && useTriangle) {
+        std::cerr << "-match-only is currently supported without triangle acceleration only." << std::endl;
+        exit(1);
+    }
+    if (profileReset && matchOnly) {
+        std::cerr << "-profile-reset should be used with normal execution, not -match-only." << std::endl;
+        exit(1);
+    }
+    if (profileReset && mode != "parallel") {
+        std::cerr << "-profile-reset is currently supported for -m parallel only." << std::endl;
+        exit(1);
+    }
+    if (profileReset && shareNode) {
+        std::cerr << "-profile-reset is currently supported for non-share mode only." << std::endl;
+        exit(1);
+    }
+    if (profileReset && useTriangle) {
+        std::cerr << "-profile-reset is currently supported without triangle acceleration only." << std::endl;
+        exit(1);
+    }
+    if (matchOnly) {
+        resultPath.clear();
     }
     ui num_threads = cmd.getNumThreads();
     ui node_partition_size = cmd.getNodePartitionSize();
@@ -32,6 +66,8 @@ int main(int argc, char **argv) {
     std::cout << "using batch query: " << batchQuery << std::endl;
     std::cout << "sharing nodes computation: " << shareNode << std::endl;
     std::cout << "using triangle: " << useTriangle << std::endl;
+    std::cout << "matching-only dry run: " << matchOnly << std::endl;
+    std::cout << "profile reset time: " << profileReset << std::endl;
     std::cout << "set intersection type: " << SI << std::endl;
     std::cout << "mode: " << mode << std::endl;
     if (mode == "parallel") {
@@ -123,7 +159,21 @@ int main(int argc, char **argv) {
     ParallelProcessingMeta *pMeta = nullptr;
     if (mode == "parallel") {
         pMeta = new ParallelProcessingMeta(num_threads, node_partition_size, prefix_partition_size, din, dout, dun);
+        pMeta->setResetProfile(profileReset);
+        setResetProfileMeta(pMeta);
     }
+    auto resetTableForProfile = [&](HashTable table, ui count) {
+        if (profileReset && pMeta != nullptr) {
+            auto resetStart = std::chrono::steady_clock::now();
+            memset(table, 0, sizeof(Count) * count);
+            auto resetEnd = std::chrono::steady_clock::now();
+            std::chrono::duration<double> resetElapsed = resetEnd - resetStart;
+            pMeta->addResetProfileSample(-1, resetElapsed.count(), false, count, sizeof(Count) * (uint64_t)count);
+        }
+        else {
+            memset(table, 0, sizeof(Count) * count);
+        }
+    };
     if (!shareNode) {
         std::vector<HashTable> mathCalH(patternGraphs.size());
         std::vector<int> orbitTypes(patternGraphs.size());
@@ -143,6 +193,7 @@ int main(int argc, char **argv) {
             end = std::chrono::steady_clock::now();
             elapsedSeconds = end - start;
             totalPlanTime += elapsedSeconds.count();
+            if (profileReset && pMeta != nullptr) pMeta->resetResetProfile();
             start = std::chrono::steady_clock::now();
             // Count* H. The LSC result is stored in H
             HashTable H;
@@ -150,17 +201,21 @@ int main(int argc, char **argv) {
             orbitTypes[i] = orbitType;
             if (orbitType == 0) {
                 H = new Count[1];
-                H[0] = 0;
+                if (!matchOnly) H[0] = 0;
             }
             else if (orbitType == 1) {
                 H = new Count[dun.getNumVertices()];
-                memset(H, 0, sizeof(Count) * n);
+                if (!matchOnly) memset(H, 0, sizeof(Count) * n);
             }
             else {
                 H = new Count[m];
-                memset(H, 0, sizeof(Count) * m);
+                if (!matchOnly) memset(H, 0, sizeof(Count) * m);
             }
             if (cn.num != 0) {
+                if (matchOnly) {
+                    std::cerr << "-match-only does not yet support executeConNode queries." << std::endl;
+                    exit(1);
+                }
                 Pattern p(patternGraphs[i]);
                 // prepare hash tables for cn
                 if (orbitType == 1) {
@@ -197,16 +252,19 @@ int main(int argc, char **argv) {
             } else {
                 for (auto it = patterns.begin(); it != patterns.end(); ++it) {
                     int divideFactor = it->first;
-                    memset(factorSum, 0, sizeof(Count) * (m + 1));
+                    if (!matchOnly)
+                        memset(factorSum, 0, sizeof(Count) * (m + 1));
                     for (int j = 0; j < it->second.size(); ++j) {
                         for (int j2 = 0; j2 < trees[divideFactor][j].size(); ++j2) {
-                            for (int l = 0; l < trees[divideFactor][j][0].getNumNodes(); ++l) {
-                                memset(ht[l], 0, sizeof(Count) * m);
-                            }
-                            if (mode == "parallel") {
-                                for (int i = 0; i < pMeta->_num_threads; i++) {
-                                    for (int l = 0; l < trees[divideFactor][j][0].getNumNodes(); ++l) {
-                                        memset(pMeta->_total_hash_table[i][l], 0, sizeof(Count) * (m));
+                            if (!matchOnly) {
+                                for (int l = 0; l < trees[divideFactor][j][0].getNumNodes(); ++l) {
+                                    resetTableForProfile(ht[l], m);
+                                }
+                                if (mode == "parallel") {
+                                    for (int i = 0; i < pMeta->_num_threads; i++) {
+                                        for (int l = 0; l < trees[divideFactor][j][0].getNumNodes(); ++l) {
+                                            resetTableForProfile(pMeta->_total_hash_table[i][l], m);
+                                        }
                                     }
                                 }
                             }
@@ -237,7 +295,7 @@ int main(int argc, char **argv) {
                                                 ht, outID, unID, reverseID, startOffset[0], patternV[0], dataV[0], visited[0], candPos, tmp, allV);
                                     } else {
                                        executeTree(t, din, dout, dun, useTriangle, triangle, patterns[divideFactor][j],
-                                                ht, outID, unID, reverseID, startOffset[0], patternV[0], dataV[0], visited[0], candPos, tmp, allV, pMeta); 
+                                                ht, outID, unID, reverseID, startOffset[0], patternV[0], dataV[0], visited[0], candPos, tmp, allV, pMeta, matchOnly);
                                     }
                                 }
                                 else {
@@ -246,7 +304,7 @@ int main(int argc, char **argv) {
                                                     ht, outID, unID, reverseID, startOffset, patternV, dataV, visited, tmp, allV);
                                     } else {
                                         multiJoinTree(t, din, dout, dun, useTriangle, triangle, patterns[divideFactor][j],
-                                                    ht, outID, unID, reverseID, startOffset, patternV, dataV, visited, tmp, allV, pMeta);
+                                                    ht, outID, unID, reverseID, startOffset, patternV, dataV, visited, tmp, allV, pMeta, matchOnly);
                                     }
                                 }
                             }
@@ -302,7 +360,21 @@ int main(int argc, char **argv) {
             exeTime = elapsedSeconds.count();
             if (batchQuery)
                 std::cout << "file: " << files[i] << ", ";
-            std::cout << "execution time: " << exeTime << "s";
+            if (matchOnly)
+                std::cout << "match-only execution time: " << exeTime << "s";
+            else
+                std::cout << "execution time: " << exeTime << "s";
+            if (profileReset && pMeta != nullptr) {
+                std::cout << ", reset wall time estimate: " << pMeta->getResetWallTimeEstimate() << "s"
+                          << ", reset serial time: " << pMeta->getResetSerialTime() << "s"
+                          << ", reset thread max time: " << pMeta->getResetThreadMaxTime() << "s"
+                          << ", reset thread sum time: " << pMeta->getResetThreadSumTime() << "s"
+                          << ", reset serial calls: " << pMeta->getResetSerialCalls()
+                          << ", reset sparse calls: " << pMeta->getResetSparseCalls()
+                          << ", reset full calls: " << pMeta->getResetFullCalls()
+                          << ", reset sparse entries: " << pMeta->getResetSparseEntries()
+                          << ", reset full bytes: " << pMeta->getResetFullBytes();
+            }
             ui numPatterns = 0;
             for (auto it = patterns.begin(); it != patterns.end(); ++it)
                 numPatterns += it->second.size();

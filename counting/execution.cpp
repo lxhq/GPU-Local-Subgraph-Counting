@@ -9,6 +9,95 @@ Count gNumMatch = 0;
 Count gNumIntermediate = 0;
 Count gNumEdgeID = 0;
 Count gNumUpdate = 0;
+static ParallelProcessingMeta *gResetProfileMeta = nullptr;
+
+void setResetProfileMeta(ParallelProcessingMeta *pMeta) {
+    gResetProfileMeta = pMeta;
+}
+
+namespace {
+ParallelProcessingMeta *activeResetProfile(ParallelProcessingMeta *pMeta) {
+    if (pMeta != nullptr) return pMeta;
+    return gResetProfileMeta;
+}
+
+int activeResetThreadID(ParallelProcessingMeta *pMeta, int threadID) {
+    if (threadID != -2 || pMeta == nullptr) return threadID;
+    return pMeta->_thread_id_ets.local();
+}
+
+void resetDenseTable(HashTable h, ui count, ParallelProcessingMeta *pMeta, int threadID) {
+    pMeta = activeResetProfile(pMeta);
+    threadID = activeResetThreadID(pMeta, threadID);
+    if (pMeta != nullptr && pMeta->profileReset()) {
+        auto start = std::chrono::steady_clock::now();
+        memset(h, 0, sizeof(Count) * count);
+        auto end = std::chrono::steady_clock::now();
+        std::chrono::duration<double> elapsedSeconds = end - start;
+        pMeta->addResetProfileSample(threadID, elapsedSeconds.count(), false, count, sizeof(Count) * (uint64_t)count);
+    }
+    else {
+        memset(h, 0, sizeof(Count) * count);
+    }
+}
+
+void resetSparseTable(HashTable h, ui *keyPos, ui keyPosSize, ParallelProcessingMeta *pMeta, int threadID) {
+    pMeta = activeResetProfile(pMeta);
+    threadID = activeResetThreadID(pMeta, threadID);
+    if (pMeta != nullptr && pMeta->profileReset()) {
+        auto start = std::chrono::steady_clock::now();
+        for (ui j = 0; j < keyPosSize; ++j) {
+            h[keyPos[j]] = 0;
+        }
+        auto end = std::chrono::steady_clock::now();
+        std::chrono::duration<double> elapsedSeconds = end - start;
+        pMeta->addResetProfileSample(threadID, elapsedSeconds.count(), true, keyPosSize, sizeof(Count) * (uint64_t)keyPosSize);
+    }
+    else {
+        for (ui j = 0; j < keyPosSize; ++j) {
+            h[keyPos[j]] = 0;
+        }
+    }
+}
+
+void resetSingleEntry(HashTable h, ui key, ParallelProcessingMeta *pMeta, int threadID) {
+    pMeta = activeResetProfile(pMeta);
+    threadID = activeResetThreadID(pMeta, threadID);
+    if (pMeta != nullptr && pMeta->profileReset()) {
+        auto start = std::chrono::steady_clock::now();
+        h[key] = 0;
+        auto end = std::chrono::steady_clock::now();
+        std::chrono::duration<double> elapsedSeconds = end - start;
+        pMeta->addResetProfileSample(threadID, elapsedSeconds.count(), true, 1, sizeof(Count));
+    }
+    else {
+        h[key] = 0;
+    }
+}
+
+void resetNodeTable(const Tree &t, VertexID nID, HashTable h, ui *keyPos, ui keyPosSize,
+                    ui n, ui m, ParallelProcessingMeta *pMeta, int threadID) {
+    if (t.getNode(nID).keySize == 0) {
+        resetSingleEntry(h, 0, pMeta, threadID);
+    }
+    else if (t.getNode(nID).keySize == 1) {
+        if (keyPosSize < n / 8 + 1) {
+            resetSparseTable(h, keyPos, keyPosSize, pMeta, threadID);
+        }
+        else {
+            resetDenseTable(h, n, pMeta, threadID);
+        }
+    }
+    else {
+        if (keyPosSize < m / 8 + 1) {
+            resetSparseTable(h, keyPos, keyPosSize, pMeta, threadID);
+        }
+        else {
+            resetDenseTable(h, m, pMeta, threadID);
+        }
+    }
+}
+}
 
 void print_hash_table(HashTable *H, ui m, ui numNodes) {
     for (ui i = 0; i < numNodes; i++) {
@@ -393,7 +482,8 @@ void executeNode(
         ui &keyPosSize,
         ui sizeBound,
         VertexID *&tmp,
-        VertexID *allV
+        VertexID *allV,
+        bool matchOnly
 ) {
     int orbitType = t.getOrbitType();
     HashTable h = H[nID];
@@ -480,32 +570,34 @@ void executeNode(
 #ifdef COLLECT_STATISTICS
                 ++gNumMatch;
 #endif
-                Count cnt = 1;
-                // multiply count in children
-                for (int j = 0; j < child.size(); ++j) {
-                    VertexID cID = child[j];
-                    cnt *= H[cID][dataV[childKeyPos[j][0]]];
-                }
-                if (isRoot) {
-                    if (orbitType == 0) h[0] += cnt * aggreWeight[0];
-                    else if (orbitType == 1) {
-                        for (int j = 0; j < aggreV.size(); ++j) {
+                if (!matchOnly) {
+                    Count cnt = 1;
+                    // multiply count in children
+                    for (int j = 0; j < child.size(); ++j) {
+                        VertexID cID = child[j];
+                        cnt *= H[cID][dataV[childKeyPos[j][0]]];
+                    }
+                    if (isRoot) {
+                        if (orbitType == 0) h[0] += cnt * aggreWeight[0];
+                        else if (orbitType == 1) {
+                            for (int j = 0; j < aggreV.size(); ++j) {
 #ifdef COLLECT_STATISTICS
-                            ++gNumUpdate;
+                                ++gNumUpdate;
 #endif
-                            VertexID key = dataV[aggrePos[j]];
-                            h[key] += cnt * aggreWeight[j];
+                                VertexID key = dataV[aggrePos[j]];
+                                h[key] += cnt * aggreWeight[j];
+                            }
                         }
                     }
-                }
-                else {
+                    else {
 #ifdef COLLECT_STATISTICS
-                    ++gNumUpdate;
+                        ++gNumUpdate;
 #endif
-                    h[dataV[aggrePos[0]]] += cnt;
-                    if (keyPosSize < sizeBound) {
-                        keyPos[keyPosSize] = dataV[aggrePos[0]];
-                        ++keyPosSize;
+                        h[dataV[aggrePos[0]]] += cnt;
+                        if (keyPosSize < sizeBound) {
+                            keyPos[keyPosSize] = dataV[aggrePos[0]];
+                            ++keyPosSize;
+                        }
                     }
                 }
                 visited[dataV[mappingSize]] = false;
@@ -598,7 +690,8 @@ void parallelNodeWorker(ParallelProcessingMeta *pMeta,
                         EdgeID *unOffset,
                         VertexID *unNbors,
                         VertexID nID,
-                        VertexID *allV) {
+                        VertexID *allV,
+                        bool matchOnly) {
 
     if (pMeta->_thread_id_ets.local() == -1) {
         pMeta->_thread_id_ets.local() = pMeta->_next_thread_id.fetch_add(1);
@@ -635,26 +728,28 @@ void parallelNodeWorker(ParallelProcessingMeta *pMeta,
             dataV[mappingSize] = v;
 
             if (depth == tau.localOrder.size() - 1) {
-                Count cnt = 1;
-                // multiply count in children
-                for (int j = 0; j < child.size(); ++j) {
-                    VertexID cID = child[j];
-                    cnt *= H[cID][dataV[childKeyPos[j][0]]];
-                }
-                if (isRoot) {
-                    if (orbitType == 0) h[0] += cnt * aggreWeight[0];
-                    else if (orbitType == 1) {
-                        for (int j = 0; j < aggreV.size(); ++j) {
-                            VertexID key = dataV[aggrePos[j]];
-                            h[key] += cnt * aggreWeight[j];
+                if (!matchOnly) {
+                    Count cnt = 1;
+                    // multiply count in children
+                    for (int j = 0; j < child.size(); ++j) {
+                        VertexID cID = child[j];
+                        cnt *= H[cID][dataV[childKeyPos[j][0]]];
+                    }
+                    if (isRoot) {
+                        if (orbitType == 0) h[0] += cnt * aggreWeight[0];
+                        else if (orbitType == 1) {
+                            for (int j = 0; j < aggreV.size(); ++j) {
+                                VertexID key = dataV[aggrePos[j]];
+                                h[key] += cnt * aggreWeight[j];
+                            }
                         }
                     }
-                }
-                else {
-                    h[dataV[aggrePos[0]]] += cnt;
-                    if (keyPosSize < sizeBound) {
-                        keyPos[keyPosSize] = dataV[aggrePos[0]];
-                        ++keyPosSize;
+                    else {
+                        h[dataV[aggrePos[0]]] += cnt;
+                        if (keyPosSize < sizeBound) {
+                            keyPos[keyPosSize] = dataV[aggrePos[0]];
+                            ++keyPosSize;
+                        }
                     }
                 }
                 visited[dataV[mappingSize]] = false;
@@ -739,7 +834,8 @@ void PexecuteNode(
         ui sizeBound,
         VertexID *&tmp,
         VertexID *allV,
-        ParallelProcessingMeta *pMeta
+        ParallelProcessingMeta *pMeta,
+        bool matchOnly
 ) {
     int orbitType = t.getOrbitType();
     HashTable h = H[nID];
@@ -771,26 +867,28 @@ void PexecuteNode(
         ui end = std::min(i + pMeta->_node_partition_size, n);
         taskGroup.run([pMeta, start, end, depth, &din, &dout, &dun, &child, isRoot, H, orbitType, &tau, &aggrePos, 
                     &nodeInterPos, &nodeInPos, &nodeOutPos, &nodeUnPos, &greaterPos, &lessPos, &childKeyPos,
-                    &aggreV, &aggreWeight, inOffset, inNbors, outOffset, outNbors, unOffset, unNbors, nID, allV]() {
+                    &aggreV, &aggreWeight, inOffset, inNbors, outOffset, outNbors, unOffset, unNbors, nID, allV, matchOnly]() {
             parallelNodeWorker(pMeta, start, end, depth, din, dout, dun, child, isRoot, H, orbitType, tau, aggrePos, 
                     nodeInterPos, nodeInPos, nodeOutPos, nodeUnPos, greaterPos, lessPos, childKeyPos, aggreV, 
-                    aggreWeight, inOffset, inNbors, outOffset, outNbors, unOffset, unNbors, nID, allV);
+                    aggreWeight, inOffset, inNbors, outOffset, outNbors, unOffset, unNbors, nID, allV, matchOnly);
         });
     }
     taskGroup.wait();
     // delete [] tmpArray;
-    
-    //combine the results from all threads
-    for (ui i = 0; i < pMeta->_num_threads; i++) {
-        HashTable thread_local_H = pMeta->_total_hash_table[i][nID];
-        for (ui j = 0; j < dun.getNumEdges(); j++) {
-            h[j] += thread_local_H[j];
-        }
-    }
 
-    for (ui i = 0; i < pMeta->_num_threads; i++) {
-        HashTable thread_local_H = pMeta->_total_hash_table[i][nID];
-        std::copy(h, h + dun.getNumEdges(), thread_local_H);
+    if (!matchOnly) {
+        //combine the results from all threads
+        for (ui i = 0; i < pMeta->_num_threads; i++) {
+            HashTable thread_local_H = pMeta->_total_hash_table[i][nID];
+            for (ui j = 0; j < dun.getNumEdges(); j++) {
+                h[j] += thread_local_H[j];
+            }
+        }
+
+        for (ui i = 0; i < pMeta->_num_threads; i++) {
+            HashTable thread_local_H = pMeta->_total_hash_table[i][nID];
+            std::copy(h, h + dun.getNumEdges(), thread_local_H);
+        }
     }
 }
 
@@ -1067,7 +1165,8 @@ void parallelNodeEdgeWorker(ParallelProcessingMeta *pMeta,
                             VertexID *outNbors,
                             EdgeID *unOffset,
                             VertexID *unNbors,
-                            VertexID *allV) {
+                            VertexID *allV,
+                            bool matchOnly) {
     if (pMeta->_thread_id_ets.local() == -1) {
         pMeta->_thread_id_ets.local() = pMeta->_next_thread_id.fetch_add(1);
     }
@@ -1116,45 +1215,47 @@ void parallelNodeEdgeWorker(ParallelProcessingMeta *pMeta,
                                              aggreEdgeType[j], dataV[aggrePos[2 * j]], dataV[aggrePos[2 * j + 1]]);
             }
             if (depth == tau.localOrder.size() - 1) {
-                Count cnt = 1;
-                // multiply count in children
-                for (int j = 0; j < child.size(); ++j) {
-                    VertexID cID = child[j];
-                    if (childKeyPos[j].size() == 1) {
-                        cnt *= H[cID][dataV[childKeyPos[j][0]]];
+                if (!matchOnly) {
+                    Count cnt = 1;
+                    // multiply count in children
+                    for (int j = 0; j < child.size(); ++j) {
+                        VertexID cID = child[j];
+                        if (childKeyPos[j].size() == 1) {
+                            cnt *= H[cID][dataV[childKeyPos[j][0]]];
+                        }
+                        else {
+                            cnt *= H[cID][childKey[j]];
+                        }
                     }
-                    else {
-                        cnt *= H[cID][childKey[j]];
-                    }
-                }
-                if (isRoot) {
-                    if (orbitType == 0) h[0] += cnt * aggreWeight[0];
-                    else if (orbitType == 1) {
-                        for (int j = 0; j < aggreV.size(); ++j) {
-                            VertexID key = dataV[aggrePos[j]];
-                            h[key] += cnt * aggreWeight[j];
+                    if (isRoot) {
+                        if (orbitType == 0) h[0] += cnt * aggreWeight[0];
+                        else if (orbitType == 1) {
+                            for (int j = 0; j < aggreV.size(); ++j) {
+                                VertexID key = dataV[aggrePos[j]];
+                                h[key] += cnt * aggreWeight[j];
+                            }
+                        }
+                        else {
+                            for (int j = 0; j < aggreKey.size(); ++j) {
+                                h[aggreKey[j]] += cnt * aggreWeight[j];
+                            }
                         }
                     }
                     else {
-                        for (int j = 0; j < aggreKey.size(); ++j) {
-                            h[aggreKey[j]] += cnt * aggreWeight[j];
+                        if (tau.keySize < 2) {
+                            h[dataV[aggrePos[0]]] += cnt;
+                            if (keyPosSize < sizeBound) {
+                                keyPos[keyPosSize] = dataV[aggrePos[0]];
+                                ++keyPosSize;
+                            }
                         }
-                    }
-                }
-                else {
-                    if (tau.keySize < 2) {
-                        h[dataV[aggrePos[0]]] += cnt;
-                        if (keyPosSize < sizeBound) {
-                            keyPos[keyPosSize] = dataV[aggrePos[0]];
-                            ++keyPosSize;
-                        }
-                    }
-                    else {
-                        EdgeID e = aggreKey[0];
-                        h[e] += cnt;
-                        if (keyPosSize < sizeBound) {
-                            keyPos[keyPosSize] = e;
-                            ++keyPosSize;
+                        else {
+                            EdgeID e = aggreKey[0];
+                            h[e] += cnt;
+                            if (keyPosSize < sizeBound) {
+                                keyPos[keyPosSize] = e;
+                                ++keyPosSize;
+                            }
                         }
                     }
                 }
@@ -1239,7 +1340,8 @@ void PexecuteNodeEdgeKey(
         ui sizeBound,
         VertexID *&tmp,
         VertexID *allV,
-        ParallelProcessingMeta *pMeta
+        ParallelProcessingMeta *pMeta,
+        bool matchOnly
 ) {
     int orbitType = t.getOrbitType();
     HashTable h = H[nID];
@@ -1283,29 +1385,31 @@ void PexecuteNodeEdgeKey(
                        &nodeInPos, &nodeOutPos, &nodeUnPos, &greaterPos, &lessPos,
                        &childKeyPos, &aggreV, &aggreWeight, &posChildEdge,
                        &posAggreEdge, &childEdgeType, &aggreEdgeType, inOffset,
-                       inNbors, outOffset, outNbors, unOffset, unNbors, allV]() {
+                       inNbors, outOffset, outNbors, unOffset, unNbors, allV, matchOnly]() {
             parallelNodeEdgeWorker(pMeta, start, end, depth, nID, child, H, din, dout, dun, isRoot,
                                    outID, unID, reverseID, orbitType, tau, aggrePos,
                                    nodeInterPos, nodeInPos, nodeOutPos, nodeUnPos,
                                    greaterPos, lessPos, childKeyPos, aggreV, aggreWeight,
                                    posChildEdge, posAggreEdge, childEdgeType, aggreEdgeType,
-                                   inOffset, inNbors, outOffset, outNbors, unOffset, unNbors, allV);
+                                   inOffset, inNbors, outOffset, outNbors, unOffset, unNbors, allV, matchOnly);
         });
     }
     taskGroup.wait();
     // delete [] tmpArray;
-    
-    //combine the results from all threads
-    for (ui i = 0; i < pMeta->_num_threads; i++) {
-        HashTable thread_local_H = pMeta->_total_hash_table[i][nID];
-        for (ui j = 0; j < dun.getNumEdges(); j++) {
-            h[j] += thread_local_H[j];
-        }
-    }
 
-    for (ui i = 0; i < pMeta->_num_threads; i++) {
-        HashTable thread_local_H = pMeta->_total_hash_table[i][nID];
-        std::copy(h, h + dun.getNumEdges(), thread_local_H);
+    if (!matchOnly) {
+        //combine the results from all threads
+        for (ui i = 0; i < pMeta->_num_threads; i++) {
+            HashTable thread_local_H = pMeta->_total_hash_table[i][nID];
+            for (ui j = 0; j < dun.getNumEdges(); j++) {
+                h[j] += thread_local_H[j];
+            }
+        }
+
+        for (ui i = 0; i < pMeta->_num_threads; i++) {
+            HashTable thread_local_H = pMeta->_total_hash_table[i][nID];
+            std::copy(h, h + dun.getNumEdges(), thread_local_H);
+        }
     }
 }
 
@@ -1334,7 +1438,8 @@ void executeNodeEdgeKey(
         ui &keyPosSize,
         ui sizeBound,
         VertexID *&tmp,
-        VertexID *allV
+        VertexID *allV,
+        bool matchOnly
 ) {
     int orbitType = t.getOrbitType();
     HashTable h = H[nID];
@@ -1453,57 +1558,59 @@ void executeNodeEdgeKey(
 #ifdef COLLECT_STATISTICS
                 ++gNumMatch;
 #endif
-                Count cnt = 1;
-                // multiply count in children
-                for (int j = 0; j < child.size(); ++j) {
-                    VertexID cID = child[j];
-                    if (childKeyPos[j].size() == 1) {
-                        cnt *= H[cID][dataV[childKeyPos[j][0]]];
+                if (!matchOnly) {
+                    Count cnt = 1;
+                    // multiply count in children
+                    for (int j = 0; j < child.size(); ++j) {
+                        VertexID cID = child[j];
+                        if (childKeyPos[j].size() == 1) {
+                            cnt *= H[cID][dataV[childKeyPos[j][0]]];
+                        }
+                        else {
+                            cnt *= H[cID][childKey[j]];
+                        }
+                    }
+                    if (isRoot) {
+                        if (orbitType == 0) h[0] += cnt * aggreWeight[0];
+                        else if (orbitType == 1) {
+                            for (int j = 0; j < aggreV.size(); ++j) {
+#ifdef COLLECT_STATISTICS
+                                ++gNumUpdate;
+#endif
+                                VertexID key = dataV[aggrePos[j]];
+                                h[key] += cnt * aggreWeight[j];
+                            }
+                        }
+                        else {
+                            for (int j = 0; j < aggreKey.size(); ++j) {
+#ifdef COLLECT_STATISTICS
+                                ++gNumUpdate;
+#endif
+                                h[aggreKey[j]] += cnt * aggreWeight[j];
+                            }
+                        }
                     }
                     else {
-                        cnt *= H[cID][childKey[j]];
-                    }
-                }
-                if (isRoot) {
-                    if (orbitType == 0) h[0] += cnt * aggreWeight[0];
-                    else if (orbitType == 1) {
-                        for (int j = 0; j < aggreV.size(); ++j) {
+                        if (tau.keySize < 2) {
 #ifdef COLLECT_STATISTICS
                             ++gNumUpdate;
 #endif
-                            VertexID key = dataV[aggrePos[j]];
-                            h[key] += cnt * aggreWeight[j];
+                            h[dataV[aggrePos[0]]] += cnt;
+                            if (keyPosSize < sizeBound) {
+                                keyPos[keyPosSize] = dataV[aggrePos[0]];
+                                ++keyPosSize;
+                            }
                         }
-                    }
-                    else {
-                        for (int j = 0; j < aggreKey.size(); ++j) {
+                        else {
+                            EdgeID e = aggreKey[0];
 #ifdef COLLECT_STATISTICS
                             ++gNumUpdate;
 #endif
-                            h[aggreKey[j]] += cnt * aggreWeight[j];
-                        }
-                    }
-                }
-                else {
-                    if (tau.keySize < 2) {
-#ifdef COLLECT_STATISTICS
-                        ++gNumUpdate;
-#endif
-                        h[dataV[aggrePos[0]]] += cnt;
-                        if (keyPosSize < sizeBound) {
-                            keyPos[keyPosSize] = dataV[aggrePos[0]];
-                            ++keyPosSize;
-                        }
-                    }
-                    else {
-                        EdgeID e = aggreKey[0];
-#ifdef COLLECT_STATISTICS
-                        ++gNumUpdate;
-#endif
-                        h[e] += cnt;
-                        if (keyPosSize < sizeBound) {
-                            keyPos[keyPosSize] = e;
-                            ++keyPosSize;
+                            h[e] += cnt;
+                            if (keyPosSize < sizeBound) {
+                                keyPos[keyPosSize] = e;
+                                ++keyPosSize;
+                            }
                         }
                     }
                 }
@@ -1881,7 +1988,8 @@ void executePartition(
         ui *pos,
         VertexID *&tmp,
         VertexID *allV,
-        ParallelProcessingMeta* pMeta
+        ParallelProcessingMeta* pMeta,
+        bool matchOnly
 ) {
     const std::vector<std::vector<VertexID>> &globalOrder = t.getGlobalOrder();
     const std::vector<std::vector<std::vector<VertexID>>> &nodesAtStep = t.getNodesAtStep();
@@ -1923,7 +2031,7 @@ void executePartition(
             isRoot = endPos == postOrder.size() && i == endPos - 1;
             if (!t.nodeEdgeKey(nID) && !useTriangle) {
                 PexecuteNode(nID, t, allChild[nID], H, din, dout, dun, p, isRoot, outID, unID, reverseID,
-                            startOffset, patternV, dataV, 0, visited, pos, nullptr, argument, argument, tmp, allV, pMeta);
+                            startOffset, patternV, dataV, 0, visited, pos, nullptr, argument, argument, tmp, allV, pMeta, matchOnly);
             }
             else if (!t.nodeEdgeKey(nID) && useTriangle) {
                 executeNodeT(nID, t, allChild[nID], candidate[nID], candCount[nID], H, din, dout, dun, tri, p, isRoot, outID, unID, reverseID,
@@ -1932,7 +2040,7 @@ void executePartition(
             }
             else if (t.nodeEdgeKey(nID) && !useTriangle) {
                 PexecuteNodeEdgeKey(nID, t, allChild[nID], H, din, dout, dun, p, isRoot, outID, unID, reverseID,
-                                   startOffset, patternV, dataV, 0, visited, pos, nullptr, argument, argument, tmp, allV, pMeta);
+                                   startOffset, patternV, dataV, 0, visited, pos, nullptr, argument, argument, tmp, allV, pMeta, matchOnly);
             }
             else {
                 executeNodeEdgeKeyT(nID, t, allChild[nID], candidate[nID], candCount[nID], H, din, dout, dun, tri, p, isRoot, outID, unID, reverseID,
@@ -2016,7 +2124,8 @@ void executePartition(
         allChild,
         endPos,
         isRoot,
-        allV
+        allV,
+        matchOnly
     );
     // ui* tmpArray = new VertexID[MAX_PATTERN_SIZE];
     for (ui i = 0; i < partitionCandCount[0]; i+=pMeta->_prefix_partition_size) {
@@ -2030,17 +2139,19 @@ void executePartition(
     // delete [] tmpArray;
     pMeta->clearPartitionCandidates(partitionOrder, partitionCandPos, postOrder, startPos, endPos);
 
-    // combine the results from all threads
-    ui rootID = postOrder[partitionPos[pID]];
-    for (ui i = 0; i < pMeta->_num_threads; i++) {
-        HashTable thread_local_H = pMeta->_total_hash_table[i][rootID];
-        for (ui j = 0; j < m; j++) {
-            H[rootID][j] += thread_local_H[j];
+    if (!matchOnly) {
+        // combine the results from all threads
+        ui rootID = postOrder[partitionPos[pID]];
+        for (ui i = 0; i < pMeta->_num_threads; i++) {
+            HashTable thread_local_H = pMeta->_total_hash_table[i][rootID];
+            for (ui j = 0; j < m; j++) {
+                H[rootID][j] += thread_local_H[j];
+            }
         }
-    }
-    for (ui i = 0; i < pMeta->_num_threads; i++) {
-        HashTable thread_local_H = pMeta->_total_hash_table[i][rootID];
-        std::copy(H[rootID], H[rootID] + dun.getNumEdges(), thread_local_H);
+        for (ui i = 0; i < pMeta->_num_threads; i++) {
+            HashTable thread_local_H = pMeta->_total_hash_table[i][rootID];
+            std::copy(H[rootID], H[rootID] + dun.getNumEdges(), thread_local_H);
+        }
     }
 # ifdef COLLECT_PARALLEL_STATISTICS
     auto end = std::chrono::high_resolution_clock::now();
@@ -2371,7 +2482,8 @@ void executeTree (
         ui *pos,
         VertexID *&tmp,
         VertexID *allV,
-        ParallelProcessingMeta* pMeta
+        ParallelProcessingMeta* pMeta,
+        bool matchOnly
 ) {
     int numNodes = (int)t.getNumNodes();
     // VertexID ***candidate = new VertexID **[numNodes];
@@ -2398,7 +2510,7 @@ void executeTree (
         std::cout << "Prefix Size: " << t.getPartitionOrder(pID).size() << std::endl;
 # endif
         executePartition(pID, t, candidate, candCount, H, din, dout, dun, useTriangle, tri,
-                         p, outID, unID, reverseID, startOffset, patternV, dataV, visited, pos, tmp, allV, pMeta);
+                         p, outID, unID, reverseID, startOffset, patternV, dataV, visited, pos, tmp, allV, pMeta, matchOnly);
         // std::cout << "Total ---" << std::endl;
         // print_hash_table(H, dun.getNumEdges(), t.getNumNodes());
         // std::cout << "Thread 0 ---" << std::endl;
@@ -2508,7 +2620,8 @@ void multiJoin(
         ui *keyPosSizes,
         ui *sizeBounds,
         VertexID *&tmp,
-        VertexID *allV
+        VertexID *allV,
+        bool matchOnly
 ) {
     int orbitType = t.getOrbitType();
     HashTable h = H[nID];
@@ -2554,25 +2667,11 @@ void multiJoin(
                 poses[cID][j] = pos[prefixPos[cID][j]];
                 visits[cID][dataVs[cID][j]] = true;
             }
-            if (t.getNode(cID).keySize == 0) H[cID][0] = 0;
-            else if (t.getNode(cID).keySize == 1) {
-                if (keyPosSizes[cID] < n / 8 + 1) {
-                    for (int j = 0; j < keyPosSizes[cID]; ++j) {
-                        H[cID][keyPoses[cID][j]] = 0;
-                    }
-                }
-                else memset(H[cID], 0, sizeof(Count) * n);
-            }
-            else {
-                if (keyPosSizes[cID] < m / 8 + 1) {
-                    for (int j = 0; j < keyPosSizes[cID]; ++j) {
-                        H[cID][keyPoses[cID][j]] = 0;
-                    }
-                }
-                else memset(H[cID], 0, sizeof(Count) * m);
+            if (!matchOnly) {
+                resetNodeTable(t, cID, H[cID], keyPoses[cID], keyPosSizes[cID], n, m, nullptr, -2);
             }
             multiJoinWrapper(cID, t, t.getChild()[cID], candidates, candCounts, H, din, dout, dun, false, tri, p, outID, unID,
-                             reverseID, startOffsets, patternVs, dataVs, visits, poses, keyPoses, keyPosSizes, sizeBounds, tmp, allV);
+                             reverseID, startOffsets, patternVs, dataVs, visits, poses, keyPoses, keyPosSizes, sizeBounds, tmp, allV, matchOnly);
             for (int j = 0; j < prefixPos[cID].size(); ++j) {
                 visits[cID][dataVs[cID][j]] = false;
             }
@@ -2646,25 +2745,11 @@ void multiJoin(
                     poses[cID][j] = pos[prefixPos[cID][j]];
                     visits[cID][dataVs[cID][j]] = true;
                 }
-                if (t.getNode(cID).keySize == 0) H[cID][0] = 0;
-                else if (t.getNode(cID).keySize == 1) {
-                    if (keyPosSizes[cID] < n / 8 + 1) {
-                        for (int j = 0; j < keyPosSizes[cID]; ++j) {
-                            H[cID][keyPoses[cID][j]] = 0;
-                        }
-                    }
-                    else memset(H[cID], 0, sizeof(Count) * n);
-                }
-                else {
-                    if (keyPosSizes[cID] < m / 8 + 1) {
-                        for (int j = 0; j < keyPosSizes[cID]; ++j) {
-                            H[cID][keyPoses[cID][j]] = 0;
-                        }
-                    }
-                    else memset(H[cID], 0, sizeof(Count) * m);
-                }
+                if (!matchOnly) {
+                resetNodeTable(t, cID, H[cID], keyPoses[cID], keyPosSizes[cID], n, m, nullptr, -2);
+            }
                 multiJoinWrapper(cID, t, t.getChild()[cID], candidates, candCounts, H, din, dout, dun, false, tri, p, outID, unID,
-                                 reverseID, startOffsets, patternVs, dataVs, visits, poses, keyPoses, keyPosSizes, sizeBounds, tmp, allV);
+                                 reverseID, startOffsets, patternVs, dataVs, visits, poses, keyPoses, keyPosSizes, sizeBounds, tmp, allV, matchOnly);
                 for (int j = 0; j < prefixPos[cID].size(); ++j) {
                     visits[cID][dataVs[cID][j]] = false;
                 }
@@ -2673,35 +2758,37 @@ void multiJoin(
 #ifdef COLLECT_STATISTICS
                 ++gNumMatch;
 #endif
-                Count cnt = 1;
-                // multiply count in children
-                for (int j = 0; j < child.size(); ++j) {
-                    VertexID cID = child[j];
-                    if (childKeyPos[j].empty()) cnt *= H[cID][0];
-                    else cnt *= H[cID][dataV[childKeyPos[j][0]]];
-                }
-                if (isRoot) {
-                    if (orbitType == 0) h[0] += cnt * aggreWeight[0];
+                if (!matchOnly) {
+                    Count cnt = 1;
+                    // multiply count in children
+                    for (int j = 0; j < child.size(); ++j) {
+                        VertexID cID = child[j];
+                        if (childKeyPos[j].empty()) cnt *= H[cID][0];
+                        else cnt *= H[cID][dataV[childKeyPos[j][0]]];
+                    }
+                    if (isRoot) {
+                        if (orbitType == 0) h[0] += cnt * aggreWeight[0];
+                        else {
+                            for (int j = 0; j < aggreV.size(); ++j) {
+                                VertexID key = dataV[aggrePos[j]];
+#ifdef COLLECT_STATISTICS
+                                ++gNumUpdate;
+#endif
+                                h[key] += cnt * aggreWeight[j];
+                            }
+                        }
+                    }
                     else {
-                        for (int j = 0; j < aggreV.size(); ++j) {
-                            VertexID key = dataV[aggrePos[j]];
+                        if (tau.keySize == 0) h[0] += cnt;
+                        else {
 #ifdef COLLECT_STATISTICS
                             ++gNumUpdate;
 #endif
-                            h[key] += cnt * aggreWeight[j];
-                        }
-                    }
-                }
-                else {
-                    if (tau.keySize == 0) h[0] += cnt;
-                    else {
-#ifdef COLLECT_STATISTICS
-                        ++gNumUpdate;
-#endif
-                        h[dataV[aggrePos[0]]] += cnt;
-                        if (keyPosSize < sizeBound) {
-                            keyPos[keyPosSize] = dataV[aggrePos[0]];
-                            ++keyPosSize;
+                            h[dataV[aggrePos[0]]] += cnt;
+                            if (keyPosSize < sizeBound) {
+                                keyPos[keyPosSize] = dataV[aggrePos[0]];
+                                ++keyPosSize;
+                            }
                         }
                     }
                 }
@@ -2789,7 +2876,8 @@ void multiJoin(
         VertexID *&tmp,
         VertexID *allV,
         ui start,
-        ui end
+        ui end,
+        bool matchOnly
 ) {
     int orbitType = t.getOrbitType();
     HashTable h = H[nID];
@@ -2835,25 +2923,11 @@ void multiJoin(
                 poses[cID][j] = pos[prefixPos[cID][j]];
                 visits[cID][dataVs[cID][j]] = true;
             }
-            if (t.getNode(cID).keySize == 0) H[cID][0] = 0;
-            else if (t.getNode(cID).keySize == 1) {
-                if (keyPosSizes[cID] < n / 8 + 1) {
-                    for (int j = 0; j < keyPosSizes[cID]; ++j) {
-                        H[cID][keyPoses[cID][j]] = 0;
-                    }
-                }
-                else memset(H[cID], 0, sizeof(Count) * n);
-            }
-            else {
-                if (keyPosSizes[cID] < m / 8 + 1) {
-                    for (int j = 0; j < keyPosSizes[cID]; ++j) {
-                        H[cID][keyPoses[cID][j]] = 0;
-                    }
-                }
-                else memset(H[cID], 0, sizeof(Count) * m);
+            if (!matchOnly) {
+                resetNodeTable(t, cID, H[cID], keyPoses[cID], keyPosSizes[cID], n, m, nullptr, -2);
             }
             multiJoinWrapper(cID, t, t.getChild()[cID], candidates, candCounts, H, din, dout, dun, false, tri, p, outID, unID,
-                             reverseID, startOffsets, patternVs, dataVs, visits, poses, keyPoses, keyPosSizes, sizeBounds, tmp, allV, start, end);
+                             reverseID, startOffsets, patternVs, dataVs, visits, poses, keyPoses, keyPosSizes, sizeBounds, tmp, allV, start, end, matchOnly);
             for (int j = 0; j < prefixPos[cID].size(); ++j) {
                 visits[cID][dataVs[cID][j]] = false;
             }
@@ -2927,25 +3001,11 @@ void multiJoin(
                     poses[cID][j] = pos[prefixPos[cID][j]];
                     visits[cID][dataVs[cID][j]] = true;
                 }
-                if (t.getNode(cID).keySize == 0) H[cID][0] = 0;
-                else if (t.getNode(cID).keySize == 1) {
-                    if (keyPosSizes[cID] < n / 8 + 1) {
-                        for (int j = 0; j < keyPosSizes[cID]; ++j) {
-                            H[cID][keyPoses[cID][j]] = 0;
-                        }
-                    }
-                    else memset(H[cID], 0, sizeof(Count) * n);
-                }
-                else {
-                    if (keyPosSizes[cID] < m / 8 + 1) {
-                        for (int j = 0; j < keyPosSizes[cID]; ++j) {
-                            H[cID][keyPoses[cID][j]] = 0;
-                        }
-                    }
-                    else memset(H[cID], 0, sizeof(Count) * m);
-                }
+                if (!matchOnly) {
+                resetNodeTable(t, cID, H[cID], keyPoses[cID], keyPosSizes[cID], n, m, nullptr, -2);
+            }
                 multiJoinWrapper(cID, t, t.getChild()[cID], candidates, candCounts, H, din, dout, dun, false, tri, p, outID, unID,
-                                 reverseID, startOffsets, patternVs, dataVs, visits, poses, keyPoses, keyPosSizes, sizeBounds, tmp, allV, start, end);
+                                 reverseID, startOffsets, patternVs, dataVs, visits, poses, keyPoses, keyPosSizes, sizeBounds, tmp, allV, start, end, matchOnly);
                 for (int j = 0; j < prefixPos[cID].size(); ++j) {
                     visits[cID][dataVs[cID][j]] = false;
                 }
@@ -2954,35 +3014,37 @@ void multiJoin(
 #ifdef COLLECT_STATISTICS
                 ++gNumMatch;
 #endif
-                Count cnt = 1;
-                // multiply count in children
-                for (int j = 0; j < child.size(); ++j) {
-                    VertexID cID = child[j];
-                    if (childKeyPos[j].empty()) cnt *= H[cID][0];
-                    else cnt *= H[cID][dataV[childKeyPos[j][0]]];
-                }
-                if (isRoot) {
-                    if (orbitType == 0) h[0] += cnt * aggreWeight[0];
+                if (!matchOnly) {
+                    Count cnt = 1;
+                    // multiply count in children
+                    for (int j = 0; j < child.size(); ++j) {
+                        VertexID cID = child[j];
+                        if (childKeyPos[j].empty()) cnt *= H[cID][0];
+                        else cnt *= H[cID][dataV[childKeyPos[j][0]]];
+                    }
+                    if (isRoot) {
+                        if (orbitType == 0) h[0] += cnt * aggreWeight[0];
+                        else {
+                            for (int j = 0; j < aggreV.size(); ++j) {
+                                VertexID key = dataV[aggrePos[j]];
+#ifdef COLLECT_STATISTICS
+                                ++gNumUpdate;
+#endif
+                                h[key] += cnt * aggreWeight[j];
+                            }
+                        }
+                    }
                     else {
-                        for (int j = 0; j < aggreV.size(); ++j) {
-                            VertexID key = dataV[aggrePos[j]];
+                        if (tau.keySize == 0) h[0] += cnt;
+                        else {
 #ifdef COLLECT_STATISTICS
                             ++gNumUpdate;
 #endif
-                            h[key] += cnt * aggreWeight[j];
-                        }
-                    }
-                }
-                else {
-                    if (tau.keySize == 0) h[0] += cnt;
-                    else {
-#ifdef COLLECT_STATISTICS
-                        ++gNumUpdate;
-#endif
-                        h[dataV[aggrePos[0]]] += cnt;
-                        if (keyPosSize < sizeBound) {
-                            keyPos[keyPosSize] = dataV[aggrePos[0]];
-                            ++keyPosSize;
+                            h[dataV[aggrePos[0]]] += cnt;
+                            if (keyPosSize < sizeBound) {
+                                keyPos[keyPosSize] = dataV[aggrePos[0]];
+                                ++keyPosSize;
+                            }
                         }
                     }
                 }
@@ -3376,7 +3438,8 @@ void multiJoinE(
         ui *keyPosSizes,
         ui *sizeBounds,
         VertexID *&tmp,
-        VertexID *allV
+        VertexID *allV,
+        bool matchOnly
 ) {
     int orbitType = t.getOrbitType();
     HashTable h = H[nID];
@@ -3430,25 +3493,11 @@ void multiJoinE(
                 poses[cID][j] = pos[prefixPos[cID][j]];
                 visits[cID][dataVs[cID][j]] = true;
             }
-            if (t.getNode(cID).keySize == 0) H[cID][0] = 0;
-            else if (t.getNode(cID).keySize == 1) {
-                if (keyPosSizes[cID] < n / 8 + 1) {
-                    for (int j = 0; j < keyPosSizes[cID]; ++j) {
-                        H[cID][keyPoses[cID][j]] = 0;
-                    }
-                }
-                else memset(H[cID], 0, sizeof(Count) * n);
-            }
-            else {
-                if (keyPosSizes[cID] < m / 8 + 1) {
-                    for (int j = 0; j < keyPosSizes[cID]; ++j) {
-                        H[cID][keyPoses[cID][j]] = 0;
-                    }
-                }
-                else memset(H[cID], 0, sizeof(Count) * m);
+            if (!matchOnly) {
+                resetNodeTable(t, cID, H[cID], keyPoses[cID], keyPosSizes[cID], n, m, nullptr, -2);
             }
             multiJoinWrapper(cID, t, t.getChild()[cID], candidates, candCounts, H, din, dout, dun, false, tri, p, outID, unID,
-                             reverseID, startOffsets, patternVs, dataVs, visits, poses, keyPoses, keyPosSizes, sizeBounds, tmp, allV);
+                             reverseID, startOffsets, patternVs, dataVs, visits, poses, keyPoses, keyPosSizes, sizeBounds, tmp, allV, matchOnly);
             for (int j = 0; j < prefixPos[cID].size(); ++j) {
                 visits[cID][dataVs[cID][j]] = false;
             }
@@ -3544,25 +3593,11 @@ void multiJoinE(
                     poses[cID][j] = pos[prefixPos[cID][j]];
                     visits[cID][dataVs[cID][j]] = true;
                 }
-                if (t.getNode(cID).keySize == 0) H[cID][0] = 0;
-                else if (t.getNode(cID).keySize == 1) {
-                    if (keyPosSizes[cID] < n / 8 + 1) {
-                        for (int j = 0; j < keyPosSizes[cID]; ++j) {
-                            H[cID][keyPoses[cID][j]] = 0;
-                        }
-                    }
-                    else memset(H[cID], 0, sizeof(Count) * n);
-                }
-                else {
-                    if (keyPosSizes[cID] < m / 8 + 1) {
-                        for (int j = 0; j < keyPosSizes[cID]; ++j) {
-                            H[cID][keyPoses[cID][j]] = 0;
-                        }
-                    }
-                    else memset(H[cID], 0, sizeof(Count) * m);
-                }
+                if (!matchOnly) {
+                resetNodeTable(t, cID, H[cID], keyPoses[cID], keyPosSizes[cID], n, m, nullptr, -2);
+            }
                 multiJoinWrapper(cID, t, t.getChild()[cID], candidates, candCounts, H, din, dout, dun, false, tri, p, outID, unID,
-                                 reverseID, startOffsets, patternVs, dataVs, visits, poses, keyPoses, keyPosSizes, sizeBounds, tmp, allV);
+                                 reverseID, startOffsets, patternVs, dataVs, visits, poses, keyPoses, keyPosSizes, sizeBounds, tmp, allV, matchOnly);
                 for (int j = 0; j < prefixPos[cID].size(); ++j) {
                     visits[cID][dataVs[cID][j]] = false;
                 }
@@ -3571,59 +3606,61 @@ void multiJoinE(
 #ifdef COLLECT_STATISTICS
                 ++gNumMatch;
 #endif
-                Count cnt = 1;
-                // multiply count in children
-                for (int j = 0; j < child.size(); ++j) {
-                    VertexID cID = child[j];
-                    if (childKeyPos[j].empty()) cnt *= H[cID][0];
-                    else if (childKeyPos[j].size() == 1) {
-                        cnt *= H[cID][dataV[childKeyPos[j][0]]];
+                if (!matchOnly) {
+                    Count cnt = 1;
+                    // multiply count in children
+                    for (int j = 0; j < child.size(); ++j) {
+                        VertexID cID = child[j];
+                        if (childKeyPos[j].empty()) cnt *= H[cID][0];
+                        else if (childKeyPos[j].size() == 1) {
+                            cnt *= H[cID][dataV[childKeyPos[j][0]]];
+                        }
+                        else {
+                            cnt *= H[cID][childKey[j]];
+                        }
+                    }
+                    if (isRoot) {
+                        if (orbitType == 0) h[0] += cnt * aggreWeight[0];
+                        else if (orbitType == 1) {
+                            for (int j = 0; j < aggreV.size(); ++j) {
+                                VertexID key = dataV[aggrePos[j]];
+#ifdef COLLECT_STATISTICS
+                                ++gNumUpdate;
+#endif
+                                h[key] += cnt * aggreWeight[j];
+                            }
+                        }
+                        else {
+                            for (int j = 0; j < aggreKey.size(); ++j) {
+#ifdef COLLECT_STATISTICS
+                                ++gNumUpdate;
+#endif
+                                h[aggreKey[j]] += cnt * aggreWeight[j];
+                            }
+                        }
                     }
                     else {
-                        cnt *= H[cID][childKey[j]];
-                    }
-                }
-                if (isRoot) {
-                    if (orbitType == 0) h[0] += cnt * aggreWeight[0];
-                    else if (orbitType == 1) {
-                        for (int j = 0; j < aggreV.size(); ++j) {
-                            VertexID key = dataV[aggrePos[j]];
+                        if (tau.keySize == 0) h[0] += cnt;
+                        else if (tau.keySize == 1) {
 #ifdef COLLECT_STATISTICS
                             ++gNumUpdate;
 #endif
-                            h[key] += cnt * aggreWeight[j];
+                            h[dataV[aggrePos[0]]] += cnt;
+                            if (keyPosSize < sizeBound) {
+                                keyPos[keyPosSize] = dataV[aggrePos[0]];
+                                ++keyPosSize;
+                            }
                         }
-                    }
-                    else {
-                        for (int j = 0; j < aggreKey.size(); ++j) {
+                        else {
+                            EdgeID e = aggreKey[0];
 #ifdef COLLECT_STATISTICS
                             ++gNumUpdate;
 #endif
-                            h[aggreKey[j]] += cnt * aggreWeight[j];
-                        }
-                    }
-                }
-                else {
-                    if (tau.keySize == 0) h[0] += cnt;
-                    else if (tau.keySize == 1) {
-#ifdef COLLECT_STATISTICS
-                        ++gNumUpdate;
-#endif
-                        h[dataV[aggrePos[0]]] += cnt;
-                        if (keyPosSize < sizeBound) {
-                            keyPos[keyPosSize] = dataV[aggrePos[0]];
-                            ++keyPosSize;
-                        }
-                    }
-                    else {
-                        EdgeID e = aggreKey[0];
-#ifdef COLLECT_STATISTICS
-                        ++gNumUpdate;
-#endif
-                        h[e] += cnt;
-                        if (keyPosSize < sizeBound) {
-                            keyPos[keyPosSize] = e;
-                            ++keyPosSize;
+                            h[e] += cnt;
+                            if (keyPosSize < sizeBound) {
+                                keyPos[keyPosSize] = e;
+                                ++keyPosSize;
+                            }
                         }
                     }
                 }
@@ -3711,7 +3748,8 @@ void multiJoinE(
         VertexID *&tmp,
         VertexID *allV,
         ui start,
-        ui end
+        ui end,
+        bool matchOnly
 ) {
     int orbitType = t.getOrbitType();
     HashTable h = H[nID];
@@ -3765,25 +3803,11 @@ void multiJoinE(
                 poses[cID][j] = pos[prefixPos[cID][j]];
                 visits[cID][dataVs[cID][j]] = true;
             }
-            if (t.getNode(cID).keySize == 0) H[cID][0] = 0;
-            else if (t.getNode(cID).keySize == 1) {
-                if (keyPosSizes[cID] < n / 8 + 1) {
-                    for (int j = 0; j < keyPosSizes[cID]; ++j) {
-                        H[cID][keyPoses[cID][j]] = 0;
-                    }
-                }
-                else memset(H[cID], 0, sizeof(Count) * n);
-            }
-            else {
-                if (keyPosSizes[cID] < m / 8 + 1) {
-                    for (int j = 0; j < keyPosSizes[cID]; ++j) {
-                        H[cID][keyPoses[cID][j]] = 0;
-                    }
-                }
-                else memset(H[cID], 0, sizeof(Count) * m);
+            if (!matchOnly) {
+                resetNodeTable(t, cID, H[cID], keyPoses[cID], keyPosSizes[cID], n, m, nullptr, -2);
             }
             multiJoinWrapper(cID, t, t.getChild()[cID], candidates, candCounts, H, din, dout, dun, false, tri, p, outID, unID,
-                             reverseID, startOffsets, patternVs, dataVs, visits, poses, keyPoses, keyPosSizes, sizeBounds, tmp, allV, start, end);
+                             reverseID, startOffsets, patternVs, dataVs, visits, poses, keyPoses, keyPosSizes, sizeBounds, tmp, allV, start, end, matchOnly);
             for (int j = 0; j < prefixPos[cID].size(); ++j) {
                 visits[cID][dataVs[cID][j]] = false;
             }
@@ -3882,25 +3906,11 @@ void multiJoinE(
                     poses[cID][j] = pos[prefixPos[cID][j]];
                     visits[cID][dataVs[cID][j]] = true;
                 }
-                if (t.getNode(cID).keySize == 0) H[cID][0] = 0;
-                else if (t.getNode(cID).keySize == 1) {
-                    if (keyPosSizes[cID] < n / 8 + 1) {
-                        for (int j = 0; j < keyPosSizes[cID]; ++j) {
-                            H[cID][keyPoses[cID][j]] = 0;
-                        }
-                    }
-                    else memset(H[cID], 0, sizeof(Count) * n);
-                }
-                else {
-                    if (keyPosSizes[cID] < m / 8 + 1) {
-                        for (int j = 0; j < keyPosSizes[cID]; ++j) {
-                            H[cID][keyPoses[cID][j]] = 0;
-                        }
-                    }
-                    else memset(H[cID], 0, sizeof(Count) * m);
-                }
+                if (!matchOnly) {
+                resetNodeTable(t, cID, H[cID], keyPoses[cID], keyPosSizes[cID], n, m, nullptr, -2);
+            }
                 multiJoinWrapper(cID, t, t.getChild()[cID], candidates, candCounts, H, din, dout, dun, false, tri, p, outID, unID,
-                                 reverseID, startOffsets, patternVs, dataVs, visits, poses, keyPoses, keyPosSizes, sizeBounds, tmp, allV, start, end);
+                                 reverseID, startOffsets, patternVs, dataVs, visits, poses, keyPoses, keyPosSizes, sizeBounds, tmp, allV, start, end, matchOnly);
                 for (int j = 0; j < prefixPos[cID].size(); ++j) {
                     visits[cID][dataVs[cID][j]] = false;
                 }
@@ -3909,59 +3919,61 @@ void multiJoinE(
 #ifdef COLLECT_STATISTICS
                 ++gNumMatch;
 #endif
-                Count cnt = 1;
-                // multiply count in children
-                for (int j = 0; j < child.size(); ++j) {
-                    VertexID cID = child[j];
-                    if (childKeyPos[j].empty()) cnt *= H[cID][0];
-                    else if (childKeyPos[j].size() == 1) {
-                        cnt *= H[cID][dataV[childKeyPos[j][0]]];
+                if (!matchOnly) {
+                    Count cnt = 1;
+                    // multiply count in children
+                    for (int j = 0; j < child.size(); ++j) {
+                        VertexID cID = child[j];
+                        if (childKeyPos[j].empty()) cnt *= H[cID][0];
+                        else if (childKeyPos[j].size() == 1) {
+                            cnt *= H[cID][dataV[childKeyPos[j][0]]];
+                        }
+                        else {
+                            cnt *= H[cID][childKey[j]];
+                        }
+                    }
+                    if (isRoot) {
+                        if (orbitType == 0) h[0] += cnt * aggreWeight[0];
+                        else if (orbitType == 1) {
+                            for (int j = 0; j < aggreV.size(); ++j) {
+                                VertexID key = dataV[aggrePos[j]];
+#ifdef COLLECT_STATISTICS
+                                ++gNumUpdate;
+#endif
+                                h[key] += cnt * aggreWeight[j];
+                            }
+                        }
+                        else {
+                            for (int j = 0; j < aggreKey.size(); ++j) {
+#ifdef COLLECT_STATISTICS
+                                ++gNumUpdate;
+#endif
+                                h[aggreKey[j]] += cnt * aggreWeight[j];
+                            }
+                        }
                     }
                     else {
-                        cnt *= H[cID][childKey[j]];
-                    }
-                }
-                if (isRoot) {
-                    if (orbitType == 0) h[0] += cnt * aggreWeight[0];
-                    else if (orbitType == 1) {
-                        for (int j = 0; j < aggreV.size(); ++j) {
-                            VertexID key = dataV[aggrePos[j]];
+                        if (tau.keySize == 0) h[0] += cnt;
+                        else if (tau.keySize == 1) {
 #ifdef COLLECT_STATISTICS
                             ++gNumUpdate;
 #endif
-                            h[key] += cnt * aggreWeight[j];
+                            h[dataV[aggrePos[0]]] += cnt;
+                            if (keyPosSize < sizeBound) {
+                                keyPos[keyPosSize] = dataV[aggrePos[0]];
+                                ++keyPosSize;
+                            }
                         }
-                    }
-                    else {
-                        for (int j = 0; j < aggreKey.size(); ++j) {
+                        else {
+                            EdgeID e = aggreKey[0];
 #ifdef COLLECT_STATISTICS
                             ++gNumUpdate;
 #endif
-                            h[aggreKey[j]] += cnt * aggreWeight[j];
-                        }
-                    }
-                }
-                else {
-                    if (tau.keySize == 0) h[0] += cnt;
-                    else if (tau.keySize == 1) {
-#ifdef COLLECT_STATISTICS
-                        ++gNumUpdate;
-#endif
-                        h[dataV[aggrePos[0]]] += cnt;
-                        if (keyPosSize < sizeBound) {
-                            keyPos[keyPosSize] = dataV[aggrePos[0]];
-                            ++keyPosSize;
-                        }
-                    }
-                    else {
-                        EdgeID e = aggreKey[0];
-#ifdef COLLECT_STATISTICS
-                        ++gNumUpdate;
-#endif
-                        h[e] += cnt;
-                        if (keyPosSize < sizeBound) {
-                            keyPos[keyPosSize] = e;
-                            ++keyPosSize;
+                            h[e] += cnt;
+                            if (keyPosSize < sizeBound) {
+                                keyPos[keyPosSize] = e;
+                                ++keyPosSize;
+                            }
                         }
                     }
                 }
@@ -4418,17 +4430,18 @@ void multiJoinWrapper(
         ui *keyPosSizes,
         ui *sizeBounds,
         VertexID *&tmp,
-        VertexID *allV
+        VertexID *allV,
+        bool matchOnly
 ) {
     bool edgeKey = t.getNode(nID).edgeKey;
     if (!useTriangle) {
         if (!edgeKey) {
             multiJoin(nID, t, child, candidates, candCounts, H, din, dout, dun, tri, p, outID, unID, reverseID,
-                      startOffsets, patternVs, dataVs, visits, poses, keyPoses, keyPosSizes, sizeBounds, tmp, allV);
+                      startOffsets, patternVs, dataVs, visits, poses, keyPoses, keyPosSizes, sizeBounds, tmp, allV, matchOnly);
         }
         else {
             multiJoinE(nID, t, child, candidates, candCounts, H, din, dout, dun, tri, p, outID, unID, reverseID,
-                       startOffsets, patternVs, dataVs, visits, poses, keyPoses, keyPosSizes, sizeBounds, tmp, allV);
+                       startOffsets, patternVs, dataVs, visits, poses, keyPoses, keyPosSizes, sizeBounds, tmp, allV, matchOnly);
         }
     }
     else {
@@ -4470,17 +4483,18 @@ void multiJoinWrapper(
         VertexID *&tmp,
         VertexID *allV,
         ui start,
-        ui end
+        ui end,
+        bool matchOnly
 ) {
     bool edgeKey = t.getNode(nID).edgeKey;
     if (!useTriangle) {
         if (!edgeKey) {
             multiJoin(nID, t, child, candidates, candCounts, H, din, dout, dun, tri, p, outID, unID, reverseID,
-                      startOffsets, patternVs, dataVs, visits, poses, keyPoses, keyPosSizes, sizeBounds, tmp, allV, start, end);
+                      startOffsets, patternVs, dataVs, visits, poses, keyPoses, keyPosSizes, sizeBounds, tmp, allV, start, end, matchOnly);
         }
         else {
             multiJoinE(nID, t, child, candidates, candCounts, H, din, dout, dun, tri, p, outID, unID, reverseID,
-                       startOffsets, patternVs, dataVs, visits, poses, keyPoses, keyPosSizes, sizeBounds, tmp, allV, start, end);
+                       startOffsets, patternVs, dataVs, visits, poses, keyPoses, keyPosSizes, sizeBounds, tmp, allV, start, end, matchOnly);
         }
     }
     else {
@@ -4589,7 +4603,8 @@ void multiJoinTree(
         bool **visited,
         VertexID *&tmp,
         VertexID *allV,
-        ParallelProcessingMeta *pMeta
+        ParallelProcessingMeta *pMeta,
+        bool matchOnly
 ) {
     int numNodes = (int)t.getNumNodes();
     ui n = dun.getNumVertices(), m = dun.getNumEdges();
@@ -4624,7 +4639,7 @@ void multiJoinTree(
     // call simple nodes
     pMeta->setMultiJoinCandidates(t, dun);
     tbb::task_group taskGroup;
-    ExecuteMultiJoinWorker worker(pMeta, t, din, dout, dun, useTriangle, tri, p, outID, unID, reverseID, allV);
+    ExecuteMultiJoinWorker worker(pMeta, t, din, dout, dun, useTriangle, tri, p, outID, unID, reverseID, allV, matchOnly);
     for (ui i = 0; i < n; i += pMeta->_prefix_partition_size) {
         ui start = i;
         ui end = std::min(i + pMeta->_prefix_partition_size, n);
@@ -4641,12 +4656,14 @@ void multiJoinTree(
     //                          pos, keyPos, keyPosSize, sizeBounds, tmp, allV);
     //     }
     // }
-    // combine the results
-    ui rootID = t.getRootID();
-    for (ui i = 0; i < pMeta->_num_threads; i++) {
-        HashTable thread_local_H = pMeta->_total_hash_table[i][rootID];
-        for (ui j = 0; j < m; j++) {
-            H[rootID][j] += thread_local_H[j];
+    if (!matchOnly) {
+        // combine the results
+        ui rootID = t.getRootID();
+        for (ui i = 0; i < pMeta->_num_threads; i++) {
+            HashTable thread_local_H = pMeta->_total_hash_table[i][rootID];
+            for (ui j = 0; j < m; j++) {
+                H[rootID][j] += thread_local_H[j];
+            }
         }
     }
     // print_hash_table(H, m, t.getNumNodes());
@@ -7359,7 +7376,8 @@ ExecutePartitionWorker::ExecutePartitionWorker(
                 const std::vector<std::vector<VertexID>> &allChild,
                 int endPos,
                 bool isRoot,
-                VertexID *allV) : 
+                VertexID *allV,
+                bool matchOnly) :
                 pMeta(pMeta), t(t), globalOrder(globalOrder), nodesAtStep(nodesAtStep), partitionOrder(partitionOrder),
                 child(child), postOrder(postOrder), partitionPos(partitionPos), partitionInPos(partitionInPos),
                 partitionOutPos(partitionOutPos), partitionUnPos(partitionUnPos), partitionInterPos(partitionInterPos),
@@ -7367,7 +7385,7 @@ ExecutePartitionWorker::ExecutePartitionWorker(
                 triEdgeType(triEdgeType), triEndType(triEndType), inOffset(inOffset), inNbors(inNbors), outOffset(outOffset),
                 outNbors(outNbors), unOffset(unOffset), unNbors(unNbors), din(din), dout(dout), dun(dun), useTriangle(useTriangle),
                 tri(tri), outID(outID), unID(unID), reverseID(reverseID), pID(pID), p(p), allChild(allChild),
-                endPos(endPos), isRoot(isRoot), allV(allV) {
+                endPos(endPos), isRoot(isRoot), allV(allV), matchOnly(matchOnly) {
 
 }
 
@@ -7421,7 +7439,7 @@ void ExecutePartitionWorker::operator()(ui start, ui end, int depth) {
                 if (nID == postOrder[endPos - 1]) {
                     if (!t.nodeEdgeKey(nID) && !useTriangle) {
                         executeNode(nID, t, allChild[nID], candidate[nID], candCount[nID], H, din, dout, dun, p, isRoot, outID, unID, reverseID,
-                                    startOffset, patternV, dataV, mappingSize + 1, visited, pos, nullptr, argument, argument, tmp, allV);
+                                    startOffset, patternV, dataV, mappingSize + 1, visited, pos, nullptr, argument, argument, tmp, allV, matchOnly);
                     }
                     else if (!t.nodeEdgeKey(nID) && useTriangle) {
                         executeNodeT(nID, t, allChild[nID], candidate[nID], candCount[nID], H, din, dout, dun, tri, p, isRoot, outID, unID, reverseID,
@@ -7429,7 +7447,7 @@ void ExecutePartitionWorker::operator()(ui start, ui end, int depth) {
                     }
                     else if (t.nodeEdgeKey(nID) && !useTriangle) {
                         executeNodeEdgeKey(nID, t, allChild[nID], candidate[nID], candCount[nID], H, din, dout, dun, p, isRoot, outID, unID, reverseID,
-                                           startOffset, patternV, dataV, mappingSize + 1, visited, pos, nullptr, argument, argument, tmp, allV);
+                                           startOffset, patternV, dataV, mappingSize + 1, visited, pos, nullptr, argument, argument, tmp, allV, matchOnly);
                     }
                     else {
                         executeNodeEdgeKeyT(nID, t, allChild[nID], candidate[nID], candCount[nID], H, din, dout, dun, tri, p, isRoot, outID, unID, reverseID,
@@ -7437,20 +7455,20 @@ void ExecutePartitionWorker::operator()(ui start, ui end, int depth) {
                     }
                 }
                 else if (t.getNode(nID).keySize < 2) {
-                    if (keyPosSize[nID] < n / 8 + 1) {
-                        for (int j = 0; j < keyPosSize[nID]; ++j) {
-                            H[nID][keyPos[nID][j]] = 0;
+                    if (!matchOnly) {
+                        if (keyPosSize[nID] < n / 8 + 1) {
+                            resetSparseTable(H[nID], keyPos[nID], keyPosSize[nID], pMeta, thread_id);
                         }
+                        else
+                            resetDenseTable(H[nID], n, pMeta, thread_id);
                     }
-                    else
-                        memset(H[nID], 0, sizeof(Count) * n);
                     keyPosSize[nID] = 0;
                     ui sizeBound = 1;
                     if (t.getNode(nID).keySize == 1) sizeBound = n / 8 + 1;
                     if (t.getNode(nID).keySize == 2) sizeBound = m / 8 + 1;
                     if (!t.nodeEdgeKey(nID) && !useTriangle) {
                         executeNode(nID, t, allChild[nID], candidate[nID], candCount[nID], H, din, dout, dun, p, false, outID, unID, reverseID,
-                                    startOffset, patternV, dataV, mappingSize + 1, visited, pos, keyPos[nID], keyPosSize[nID], sizeBound, tmp, allV);
+                                    startOffset, patternV, dataV, mappingSize + 1, visited, pos, keyPos[nID], keyPosSize[nID], sizeBound, tmp, allV, matchOnly);
                     }
                     else if (!t.nodeEdgeKey(nID) && useTriangle) {
                         executeNodeT(nID, t, allChild[nID], candidate[nID], candCount[nID], H, din, dout, dun, tri, p, false, outID, unID, reverseID,
@@ -7458,7 +7476,7 @@ void ExecutePartitionWorker::operator()(ui start, ui end, int depth) {
                     }
                     else if (t.nodeEdgeKey(nID) && !useTriangle) {
                         executeNodeEdgeKey(nID, t, allChild[nID], candidate[nID], candCount[nID], H, din, dout, dun, p, false, outID, unID, reverseID,
-                                           startOffset, patternV, dataV, mappingSize + 1, visited, pos, keyPos[nID], keyPosSize[nID], sizeBound, tmp, allV);
+                                           startOffset, patternV, dataV, mappingSize + 1, visited, pos, keyPos[nID], keyPosSize[nID], sizeBound, tmp, allV, matchOnly);
                     }
                     else {
                         executeNodeEdgeKeyT(nID, t, allChild[nID], candidate[nID], candCount[nID], H, din, dout, dun, tri, p, false, outID, unID, reverseID,
@@ -7466,17 +7484,17 @@ void ExecutePartitionWorker::operator()(ui start, ui end, int depth) {
                     }
                 }
                 else {
-                    if (keyPosSize[nID] < m / 8) {
-                        for (int j = 0; j < keyPosSize[nID]; ++j) {
-                            H[nID][keyPos[nID][j]] = 0;
+                    if (!matchOnly) {
+                        if (keyPosSize[nID] < m / 8) {
+                            resetSparseTable(H[nID], keyPos[nID], keyPosSize[nID], pMeta, thread_id);
                         }
+                        else
+                            resetDenseTable(H[nID], m, pMeta, thread_id);
                     }
-                    else
-                        memset(H[nID], 0, sizeof(Count) * m);
                     keyPosSize[nID] = 0;
                     if (!useTriangle) {
                         executeNodeEdgeKey(nID, t, allChild[nID], candidate[nID], candCount[nID], H, din, dout, dun, p, false, outID, unID, reverseID, startOffset,
-                                           patternV, dataV, mappingSize + 1, visited, pos, keyPos[nID], keyPosSize[nID], m / 8, tmp, allV);
+                                           patternV, dataV, mappingSize + 1, visited, pos, keyPos[nID], keyPosSize[nID], m / 8, tmp, allV, matchOnly);
                     }
                     else {
                         executeNodeEdgeKeyT(nID, t, allChild[nID], candidate[nID], candCount[nID], H, din, dout, dun, tri, p, false, outID, unID, reverseID, startOffset,
@@ -7575,10 +7593,11 @@ ExecuteMultiJoinWorker::ExecuteMultiJoinWorker(
                 EdgeID *outID,
                 EdgeID *unID,
                 EdgeID *reverseID,
-                VertexID *allV) : 
+                VertexID *allV,
+                bool matchOnly) :
                 pMeta(pMeta), t(t), din(din), dout(dout), dun(dun),
                 useTriangle(useTriangle), tri(tri), p(p), outID(outID), unID(unID),
-                reverseID(reverseID), allV(allV) {
+                reverseID(reverseID), allV(allV), matchOnly(matchOnly) {
 
 }
 ExecuteMultiJoinWorker::~ExecuteMultiJoinWorker() {
@@ -7612,13 +7631,16 @@ void ExecuteMultiJoinWorker::operator()(ui start, ui end) {
                             pMeta->_total_tmp[thread_id],
                             allV,
                             start,
-                            end);
+                            end,
+                            matchOnly);
         }
     }
     // print_hash_table(pMeta->_total_hash_table[thread_id], dun.getNumEdges(), t.getNumNodes());
-    for (int i = 0; i < t.getNumNodes(); i++) {
-        if (i != t.getRootID()) {
-            memset(pMeta->_total_hash_table[thread_id][i], 0, sizeof(Count) * dun.getNumEdges());
+    if (!matchOnly) {
+        for (int i = 0; i < t.getNumNodes(); i++) {
+            if (i != t.getRootID()) {
+                resetDenseTable(pMeta->_total_hash_table[thread_id][i], dun.getNumEdges(), pMeta, thread_id);
+            }
         }
     }
 }

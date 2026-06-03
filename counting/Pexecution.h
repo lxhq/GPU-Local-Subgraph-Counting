@@ -8,6 +8,8 @@
 #include "compute_set_intersection.h"
 #include "forest.h"
 #include "triangle.h"
+#include <atomic>
+#include <cstdint>
 
 class ParallelProcessingMeta {
 public:
@@ -34,6 +36,14 @@ public:
     ui*** _total_multi_join_pos;
     bool*** _total_visited_vertices;
     VertexID** _total_tmp;
+    bool _profile_reset;
+    double _reset_serial_time;
+    double *_reset_thread_time;
+    std::atomic<uint64_t> _reset_serial_calls;
+    std::atomic<uint64_t> _reset_sparse_calls;
+    std::atomic<uint64_t> _reset_full_calls;
+    std::atomic<uint64_t> _reset_sparse_entries;
+    std::atomic<uint64_t> _reset_full_bytes;
     ParallelProcessingMeta(){}
     ParallelProcessingMeta(ui num_threads,
                     ui _node_partition_size,
@@ -50,5 +60,18 @@ public:
                                   const std::vector<VertexID> &postOrder, int startPos, int endPos);
     void setMultiJoinCandidates(const Tree&t, const DataGraph& dout);
     void clearMultiJoinCandidates(const Tree&t);
+    void setResetProfile(bool enabled);
+    bool profileReset() const;
+    void resetResetProfile();
+    void addResetProfileSample(int threadID, double seconds, bool sparse, uint64_t entries, uint64_t bytes);
+    double getResetSerialTime() const;
+    double getResetThreadSumTime() const;
+    double getResetThreadMaxTime() const;
+    double getResetWallTimeEstimate() const;
+    uint64_t getResetSerialCalls() const;
+    uint64_t getResetSparseCalls() const;
+    uint64_t getResetFullCalls() const;
+    uint64_t getResetSparseEntries() const;
+    uint64_t getResetFullBytes() const;
     ~ParallelProcessingMeta();
 };
