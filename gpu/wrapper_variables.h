@@ -10,6 +10,26 @@
 #include "nodeGPU.h"
 #include "gpu_config.h"
 
+enum class GpuResetKind {
+    InitialZero,
+    RepeatedClear
+};
+
+struct GpuResetProfileStats {
+    double initialZeroTime = 0.0;
+    double repeatedClearTime = 0.0;
+    uint64_t initialZeroCalls = 0;
+    uint64_t repeatedClearCalls = 0;
+    uint64_t initialZeroBytes = 0;
+    uint64_t repeatedClearBytes = 0;
+};
+
+void setGpuResetProfileEnabled(bool enabled);
+bool getGpuResetProfileEnabled();
+void resetGpuResetProfile();
+GpuResetProfileStats getGpuResetProfileStats();
+void gpuProfiledMemset(void *ptr, int value, size_t bytes, GpuResetKind kind);
+
 class AggregationTableWrapper {
 protected:
     std::vector<uint64_t*> h_d_H;                   // host pointers to device hash tables for each aggregation vertex
@@ -32,7 +52,7 @@ public:
             uint64_t* d_H = static_cast<uint64_t*>(
                 memory_manager.allocate((dun.getNumEdges() + 1) * sizeof(uint64_t), sizeof(uint64_t), "d_H " + std::to_string(nID))
             );
-            cudaErrorCheck(cudaMemset(d_H, 0, (dun.getNumEdges() + 1) * sizeof(uint64_t)));
+            gpuProfiledMemset(d_H, 0, (dun.getNumEdges() + 1) * sizeof(uint64_t), GpuResetKind::InitialZero);
             cudaErrorCheck(cudaMemcpy(d_d_H + nID, &d_H, sizeof(uint64_t*), cudaMemcpyHostToDevice));
             this->h_d_H.push_back(d_H);
         }

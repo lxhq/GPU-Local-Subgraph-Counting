@@ -47,6 +47,8 @@ int main(int argc, char **argv) {
     uint32_t prob_limit = cmd.getProbLimit();
     uint32_t memory_pool_size = cmd.getMemoryPoolSize();
     float execution_memory_pool_size = cmd.getExecutionMemoryPoolSize();
+    bool profileReset = cmd.getProfileReset();
+    setGpuResetProfileEnabled(profileReset);
     std::cout << "query graph path: " << queryGraphPath << std::endl;
     std::cout << "data graph path: " << dataGraphPath << std::endl;
     std::cout << "result path: " << resultPath << std::endl;
@@ -56,6 +58,7 @@ int main(int argc, char **argv) {
     std::cout << "set intersection type: " << SI << std::endl;
     std::cout << "max memory pool size: " << memory_pool_size << " GB" << std::endl;
     std::cout << "execution memory budget: " << execution_memory_pool_size << " GB" << std::endl;
+    std::cout << "profile reset time: " << profileReset << std::endl;
     std::cout << "subgraph matching hashtable ratio: " << ratio << std::endl;
     std::cout << "prob limit: " << prob_limit << std::endl;
     std::cout << "hash table type: " << HASH_TABLE_TYPE << std::endl;
@@ -136,6 +139,7 @@ int main(int argc, char **argv) {
     ui totalNumPatterns = 0, totalNodes = 0;
     double averageNodeSize = 0.0;
     int numVertexTable = 0, numEdgeTable = 0;
+    GpuResetProfileStats totalResetStats;
     reset_global_aggregation_hash_table_stats();
     reset_global_restart_profile_stats();
 
@@ -247,6 +251,9 @@ int main(int argc, char **argv) {
             totalPlanTime += elapsedSeconds.count();
             reset_aggregation_hash_table_stats();
             reset_restart_profile_stats();
+            if (profileReset) {
+                resetGpuResetProfile();
+            }
             start = std::chrono::steady_clock::now();
             // Count* H. The LSC result is stored in H
             HashTable H;
@@ -434,6 +441,27 @@ int main(int argc, char **argv) {
             std::cout << ", aggregation total hash table bytes: " << aggregation_hash_table_total_bytes;
             std::cout << ", aggregation average hash table bytes: " << get_aggregation_average_hash_table_size_bytes();
             std::cout << ", aggregation average hash table GB: " << get_aggregation_average_hash_table_size_bytes() / (1024.0 * 1024.0 * 1024.0);
+            if (profileReset) {
+                GpuResetProfileStats resetStats = getGpuResetProfileStats();
+                const double resetTotalTime = resetStats.initialZeroTime + resetStats.repeatedClearTime;
+                const uint64_t resetTotalCalls = resetStats.initialZeroCalls + resetStats.repeatedClearCalls;
+                const uint64_t resetTotalBytes = resetStats.initialZeroBytes + resetStats.repeatedClearBytes;
+                totalResetStats.initialZeroTime += resetStats.initialZeroTime;
+                totalResetStats.repeatedClearTime += resetStats.repeatedClearTime;
+                totalResetStats.initialZeroCalls += resetStats.initialZeroCalls;
+                totalResetStats.repeatedClearCalls += resetStats.repeatedClearCalls;
+                totalResetStats.initialZeroBytes += resetStats.initialZeroBytes;
+                totalResetStats.repeatedClearBytes += resetStats.repeatedClearBytes;
+                std::cout << ", gpu reset total time: " << resetTotalTime << "s"
+                          << ", gpu reset initial zero time: " << resetStats.initialZeroTime << "s"
+                          << ", gpu reset repeated clear time: " << resetStats.repeatedClearTime << "s"
+                          << ", gpu reset total calls: " << resetTotalCalls
+                          << ", gpu reset initial zero calls: " << resetStats.initialZeroCalls
+                          << ", gpu reset repeated clear calls: " << resetStats.repeatedClearCalls
+                          << ", gpu reset total bytes: " << resetTotalBytes
+                          << ", gpu reset initial zero bytes: " << resetStats.initialZeroBytes
+                          << ", gpu reset repeated clear bytes: " << resetStats.repeatedClearBytes;
+            }
             RestartProfileStats restartStats = get_restart_profile_stats();
             std::cout << ", restart profile batch iterations: " << restartStats.batchIterations;
             std::cout << ", restart count: " << restartStats.restartCount;
@@ -465,6 +493,20 @@ int main(int argc, char **argv) {
         std::cout << "total average batch size: " << global_running_avg << std::endl;
         std::cout << "total average hash table bytes: " << get_global_average_hash_table_size_bytes() << std::endl;
         std::cout << "total average hash table GB: " << get_global_average_hash_table_size_bytes() / (1024.0 * 1024.0 * 1024.0) << std::endl;
+        if (profileReset) {
+            const double resetTotalTime = totalResetStats.initialZeroTime + totalResetStats.repeatedClearTime;
+            const uint64_t resetTotalCalls = totalResetStats.initialZeroCalls + totalResetStats.repeatedClearCalls;
+            const uint64_t resetTotalBytes = totalResetStats.initialZeroBytes + totalResetStats.repeatedClearBytes;
+            std::cout << "total gpu reset total time: " << resetTotalTime << "s" << std::endl;
+            std::cout << "total gpu reset initial zero time: " << totalResetStats.initialZeroTime << "s" << std::endl;
+            std::cout << "total gpu reset repeated clear time: " << totalResetStats.repeatedClearTime << "s" << std::endl;
+            std::cout << "total gpu reset total calls: " << resetTotalCalls << std::endl;
+            std::cout << "total gpu reset initial zero calls: " << totalResetStats.initialZeroCalls << std::endl;
+            std::cout << "total gpu reset repeated clear calls: " << totalResetStats.repeatedClearCalls << std::endl;
+            std::cout << "total gpu reset total bytes: " << resetTotalBytes << std::endl;
+            std::cout << "total gpu reset initial zero bytes: " << totalResetStats.initialZeroBytes << std::endl;
+            std::cout << "total gpu reset repeated clear bytes: " << totalResetStats.repeatedClearBytes << std::endl;
+        }
         RestartProfileStats totalRestartStats = get_global_restart_profile_stats();
         std::cout << "total restart profile batch iterations: " << totalRestartStats.batchIterations << std::endl;
         std::cout << "total restart count: " << totalRestartStats.restartCount << std::endl;

@@ -1,6 +1,9 @@
 #include "wrapper_variables.h"
 
 namespace {
+bool g_gpu_reset_profile_enabled = false;
+GpuResetProfileStats g_gpu_reset_profile_stats;
+
 bool isPrimeBucketCount(uint64_t value) {
     if (value < 2) {
         return false;
@@ -31,6 +34,53 @@ uint64_t largestPrimeBucketCount(uint64_t value) {
     }
     return value;
 }
+}
+
+void setGpuResetProfileEnabled(bool enabled) {
+    g_gpu_reset_profile_enabled = enabled;
+}
+
+bool getGpuResetProfileEnabled() {
+    return g_gpu_reset_profile_enabled;
+}
+
+void resetGpuResetProfile() {
+    g_gpu_reset_profile_stats = GpuResetProfileStats();
+}
+
+GpuResetProfileStats getGpuResetProfileStats() {
+    return g_gpu_reset_profile_stats;
+}
+
+void gpuProfiledMemset(void *ptr, int value, size_t bytes, GpuResetKind kind) {
+    if (!g_gpu_reset_profile_enabled) {
+        cudaErrorCheck(cudaMemset(ptr, value, bytes));
+        return;
+    }
+
+    cudaEvent_t start;
+    cudaEvent_t stop;
+    cudaErrorCheck(cudaEventCreate(&start));
+    cudaErrorCheck(cudaEventCreate(&stop));
+    cudaErrorCheck(cudaEventRecord(start));
+    cudaErrorCheck(cudaMemset(ptr, value, bytes));
+    cudaErrorCheck(cudaEventRecord(stop));
+    cudaErrorCheck(cudaEventSynchronize(stop));
+    float elapsedMs = 0.0f;
+    cudaErrorCheck(cudaEventElapsedTime(&elapsedMs, start, stop));
+    cudaErrorCheck(cudaEventDestroy(start));
+    cudaErrorCheck(cudaEventDestroy(stop));
+
+    const double elapsedSeconds = elapsedMs / 1000.0;
+    if (kind == GpuResetKind::InitialZero) {
+        g_gpu_reset_profile_stats.initialZeroTime += elapsedSeconds;
+        ++g_gpu_reset_profile_stats.initialZeroCalls;
+        g_gpu_reset_profile_stats.initialZeroBytes += bytes;
+    } else {
+        g_gpu_reset_profile_stats.repeatedClearTime += elapsedSeconds;
+        ++g_gpu_reset_profile_stats.repeatedClearCalls;
+        g_gpu_reset_profile_stats.repeatedClearBytes += bytes;
+    }
 }
 
 // --------------------- warpcore wrapper --------------------- //
@@ -69,7 +119,7 @@ void WarpcoreWrapper::allocatePartitionHashTable(const Tree& t, MemoryManager &m
 
 void WarpcoreWrapper::clearPartitionHashTable(uint32_t nID) {
     if (h_d_partition_H[nID] != nullptr) {
-        cudaErrorCheck(cudaMemset(partition_H_ptrs[nID].first, 0, this->partitionHashtableSize));
+        gpuProfiledMemset(partition_H_ptrs[nID].first, 0, this->partitionHashtableSize, GpuResetKind::RepeatedClear);
     }
 }
 
@@ -123,7 +173,7 @@ void LockFreeHashTableWrapper::allocatePartitionHashTable(const Tree& t, MemoryM
             continue;
         }
         void* d_partition_H = memory_manager.allocate(this->partitionHashtableSize, sizeof(uint64_t), "d_partition_H " + std::to_string(nID));
-        cudaErrorCheck(cudaMemset(d_partition_H, 0, this->partitionHashtableSize));
+        gpuProfiledMemset(d_partition_H, 0, this->partitionHashtableSize, GpuResetKind::InitialZero);
         cudaErrorCheck(cudaMemcpy(this->d_d_partition_H + nID, &d_partition_H, sizeof(void*), cudaMemcpyHostToDevice));
         this->h_d_partition_H[nID] = static_cast<uint64_t*>(d_partition_H);
     }
@@ -131,7 +181,7 @@ void LockFreeHashTableWrapper::allocatePartitionHashTable(const Tree& t, MemoryM
 
 void LockFreeHashTableWrapper::clearPartitionHashTable(uint32_t nID) {
     if (h_d_partition_H[nID] != nullptr) {
-        cudaErrorCheck(cudaMemset(h_d_partition_H[nID], 0, this->partitionHashtableSize));
+        gpuProfiledMemset(h_d_partition_H[nID], 0, this->partitionHashtableSize, GpuResetKind::RepeatedClear);
     }
 }
 
@@ -183,7 +233,7 @@ void LockBasedHashTableWrapper::allocatePartitionHashTable(const Tree& t, Memory
             continue;
         }
         void* d_partition_H = memory_manager.allocate(this->partitionHashtableSize, sizeof(uint64_t), "d_partition_H " + std::to_string(nID));
-        cudaErrorCheck(cudaMemset(d_partition_H, 0, this->partitionHashtableSize));
+        gpuProfiledMemset(d_partition_H, 0, this->partitionHashtableSize, GpuResetKind::InitialZero);
         cudaErrorCheck(cudaMemcpy(this->d_d_partition_H + nID, &d_partition_H, sizeof(void*), cudaMemcpyHostToDevice));
         this->h_d_partition_H[nID] = static_cast<uint64_t*>(d_partition_H);
     }
@@ -191,7 +241,7 @@ void LockBasedHashTableWrapper::allocatePartitionHashTable(const Tree& t, Memory
 
 void LockBasedHashTableWrapper::clearPartitionHashTable(uint32_t nID) {
     if (h_d_partition_H[nID] != nullptr) {
-        cudaErrorCheck(cudaMemset(h_d_partition_H[nID], 0, this->partitionHashtableSize));
+        gpuProfiledMemset(h_d_partition_H[nID], 0, this->partitionHashtableSize, GpuResetKind::RepeatedClear);
     }
 }
     
@@ -241,7 +291,7 @@ void DenseArrayWrapper::allocatePartitionHashTable(const Tree& t, MemoryManager 
             continue;
         }
         void* d_partition_H = memory_manager.allocate(hashtableSize, sizeof(uint64_t), "d_partition_H " + std::to_string(nID));
-        cudaErrorCheck(cudaMemset(d_partition_H, 0, hashtableSize));
+        gpuProfiledMemset(d_partition_H, 0, hashtableSize, GpuResetKind::InitialZero);
         cudaErrorCheck(cudaMemcpy(this->d_d_partition_H + nID, &d_partition_H, sizeof(void*), cudaMemcpyHostToDevice));
         this->h_d_partition_H[nID] = static_cast<uint64_t*>(d_partition_H);
     }
@@ -249,7 +299,7 @@ void DenseArrayWrapper::allocatePartitionHashTable(const Tree& t, MemoryManager 
 
 void DenseArrayWrapper::clearPartitionHashTable(uint32_t nID) {
     if (h_d_partition_H[nID] != nullptr) {
-        cudaErrorCheck(cudaMemset(h_d_partition_H[nID], 0, this->partitionHashtableSize));
+        gpuProfiledMemset(h_d_partition_H[nID], 0, this->partitionHashtableSize, GpuResetKind::RepeatedClear);
     }
 }
 

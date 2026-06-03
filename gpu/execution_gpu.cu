@@ -362,10 +362,9 @@ void simpleTreeHelper(
                     );
                     // clear the array
                     if (nID != partitionRootNodeID) {
-                        cudaErrorCheck(
-                            cudaMemset(hashtables.getHashTableHostPointer()[nID], 0,
-                                        (dun.getNumEdges() + 1) * sizeof(uint64_t))
-                        );
+                        gpuProfiledMemset(hashtables.getHashTableHostPointer()[nID], 0,
+                                          (dun.getNumEdges() + 1) * sizeof(uint64_t),
+                                          GpuResetKind::RepeatedClear);
                     }
                 }
             }
@@ -748,10 +747,9 @@ void complexTreeHelper(
                     );
                     // clear the array
                     if (cID != partitionRootNodeID) {
-                        cudaErrorCheck(
-                            cudaMemset(hashtables.getHashTableHostPointer()[cID], 0,
-                                        (dun.getNumEdges() + 1) * sizeof(uint64_t))
-                        );
+                        gpuProfiledMemset(hashtables.getHashTableHostPointer()[cID], 0,
+                                          (dun.getNumEdges() + 1) * sizeof(uint64_t),
+                                          GpuResetKind::RepeatedClear);
                     }
                 }
             }

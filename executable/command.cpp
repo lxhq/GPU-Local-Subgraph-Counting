@@ -15,12 +15,14 @@ Command::Command(int argc, char **argv) : CommandParser(argc, argv){
     optionsKey[OptionKeyword::ProbLimit] = "-prob";
     optionsKey[OptionKeyword::MemoryPool] = "-mem";
     optionsKey[OptionKeyword::ExecutionMemoryPool] = "-exec-mem";
+    optionsKey[OptionKeyword::ProfileReset] = "-profile-reset";
     floatOptionValue[OptionKeyword::HashtableSizeFactor] = 1.0;
     floatOptionValue[OptionKeyword::ExecutionMemoryPool] = 0.0;
     intOptionValue[OptionKeyword::ProbLimit] = 64;
     intOptionValue[OptionKeyword::MemoryPool] = 0;
     booleanOptionValue[OptionKeyword::BatchQuery] = false;
     booleanOptionValue[OptionKeyword::ShareNode] = false;
+    booleanOptionValue[OptionKeyword::ProfileReset] = false;
     processOptions();
 }
 
@@ -43,4 +45,5 @@ void Command::processOptions() {
     }
     booleanOptionValue[OptionKeyword::BatchQuery] = commandOptionExists(optionsKey[OptionKeyword::BatchQuery]);
     booleanOptionValue[OptionKeyword::ShareNode] = commandOptionExists(optionsKey[OptionKeyword::ShareNode]);
+    booleanOptionValue[OptionKeyword::ProfileReset] = commandOptionExists(optionsKey[OptionKeyword::ProfileReset]);
 }

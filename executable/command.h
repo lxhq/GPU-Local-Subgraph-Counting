@@ -19,7 +19,8 @@ enum OptionKeyword {
     HashtableSizeFactor = 7, // -ratio, the factor of hash table size
     ProbLimit = 8,           // -prob, the limit of probability
     MemoryPool = 9,          // -mem, the size of memory pool in GB
-    ExecutionMemoryPool = 10 // -exec-mem, execution memory budget in GB
+    ExecutionMemoryPool = 10, // -exec-mem, execution memory budget in GB
+    ProfileReset = 11        // -profile-reset, profile GPU table reset time
 };
 
 class Command : public CommandParser {
@@ -74,6 +75,10 @@ public:
 
     float getExecutionMemoryPoolSize() {
         return floatOptionValue[OptionKeyword::ExecutionMemoryPool];
+    }
+
+    bool getProfileReset() {
+        return booleanOptionValue[OptionKeyword::ProfileReset];
     }
 };
 
