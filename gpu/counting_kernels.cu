@@ -519,7 +519,8 @@ __global__ void finalLevelWithLocalCacheKernel(
         bool isRoot,
         uint32_t numTreeNodes,
         uint32_t nID,
-        uint32_t prob_limit
+        uint32_t prob_limit,
+        bool matchOnly
 ) {
     __shared__ uint32_t local_partial_embedding[WARP_PER_BLOCK][MAX_PATTERN_SIZE + 2];
     __shared__ uint32_t* local_all_pred_neighbor[WARP_PER_BLOCK][MAX_PATTERN_SIZE];
@@ -545,7 +546,7 @@ __global__ void finalLevelWithLocalCacheKernel(
     uint64_t aggregateWrite = 0;
 
     if (global_warp_id > embedding_size - 1) return;
-    if (global_warp_id > *failed_write) return;
+    if (!matchOnly && global_warp_id > *failed_write) return;
 
     if (lane_id < depth + index_len) {
         local_partial_embedding[warp_id][lane_id] = embedding[global_warp_id * (depth + index_len) + lane_id];
@@ -596,7 +597,7 @@ __global__ void finalLevelWithLocalCacheKernel(
         for (int j = 0; j < local_node.childCount; j++) {
             VertexID cID = local_node.children[j];
             VertexID key = local_partial_embedding[warp_id][local_node.childKeyPos[j][0] + index_len];
-            if (local_node.childKeyPos[j][0] != depth) {
+            if (!matchOnly && local_node.childKeyPos[j][0] != depth) {
                 local_aggreRead[warp_id] *= lookup(
                     local_d_d_H[cID],
                     local_node,
@@ -614,7 +615,7 @@ __global__ void finalLevelWithLocalCacheKernel(
         }
     }
     __syncwarp();
-    if (local_aggreRead[warp_id] == 0) return;
+    if (!matchOnly && local_aggreRead[warp_id] == 0) return;
 
     // start traversing all candidates
     uint32_t num_iters = (local_all_pred_neighbor_size[warp_id][local_shortest_neighbor[warp_id]] + WARP_SIZE - 1) / WARP_SIZE;
@@ -650,7 +651,7 @@ __global__ void finalLevelWithLocalCacheKernel(
         for (int j = 0; j < local_node.childCount; j++) {
             VertexID cID = local_node.children[j];
             if (local_node.childKeyPos[j][0] == depth) {
-                if (found) {
+                if (!matchOnly && found) {
                     cnt *= lookup(
                         local_d_d_H[cID],
                         local_node,
@@ -668,7 +669,9 @@ __global__ void finalLevelWithLocalCacheKernel(
             }
         }
         unsigned long long* h = reinterpret_cast<unsigned long long*>(local_d_d_H[nID]);
-        if (isRoot) {
+        if (matchOnly) {
+            if (found) aggregateWrite += cnt;
+        } else if (isRoot) {
             bool already_add_to_shared_mem = false;
             for (int j = 0; j < local_node.aggreVCount; j++) {
                 if (local_node.aggrePos[j] == depth) {
@@ -705,12 +708,13 @@ __global__ void finalLevelWithLocalCacheKernel(
         }
     }
     __syncwarp();
-    if (global_warp_id >= *failed_write) return;
+    if (!matchOnly && global_warp_id >= *failed_write) return;
     for (int offset = warpSize / 2; offset > 0; offset /= 2) {
         aggregateWrite += __shfl_down_sync(0xFFFFFFFF, aggregateWrite, offset);
     }
     aggregateWrite = __shfl_sync(0xffffffff, aggregateWrite, 0);
     if (aggregateWrite == 0) return;
+    if (matchOnly) return;
     unsigned long long* h = reinterpret_cast<unsigned long long*>(local_d_d_H[nID]);
     if (isRoot) {
         if (lane_id < local_node.aggreVCount) {
@@ -758,7 +762,8 @@ __global__ void finalLevelWithEdgeWithLocalCacheKernel(
         bool isRoot,
         uint32_t numTreeNodes,
         uint32_t nID,
-        uint32_t prob_limit
+        uint32_t prob_limit,
+        bool matchOnly
 ) {
     __shared__ uint32_t local_partial_embedding[WARP_PER_BLOCK][MAX_PATTERN_SIZE + 2];
     __shared__ uint32_t* local_all_pred_neighbor[WARP_PER_BLOCK][MAX_PATTERN_SIZE];
@@ -790,7 +795,7 @@ __global__ void finalLevelWithEdgeWithLocalCacheKernel(
     uint64_t aggregateWrite = 0;
 
     if (global_warp_id > embedding_size - 1) return;
-    if (global_warp_id > *failed_write) return;
+    if (!matchOnly && global_warp_id > *failed_write) return;
     
     if (lane_id < depth + index_len) {
         local_partial_embedding[warp_id][lane_id] = embedding[global_warp_id * (depth + index_len) + lane_id];
@@ -884,7 +889,7 @@ __global__ void finalLevelWithEdgeWithLocalCacheKernel(
         for (int j = 0; j < local_node.childCount; ++j) {
             VertexID cID = local_node.children[j];
             if (local_node.childKeyPosCount[j] == 1) {
-                if (local_node.childKeyPos[j][0] != depth) {
+                if (!matchOnly && local_node.childKeyPos[j][0] != depth) {
                     VertexID key = local_partial_embedding[warp_id][index_len + local_node.childKeyPos[j][0]];
                     local_aggreRead[warp_id] *= lookup(
                         local_d_d_H[cID],
@@ -901,7 +906,7 @@ __global__ void finalLevelWithEdgeWithLocalCacheKernel(
                     );
                 }
             } else {
-                if (local_childKey[warp_id][j] != UINT32_MAX) {
+                if (!matchOnly && local_childKey[warp_id][j] != UINT32_MAX) {
                     local_aggreRead[warp_id] *= lookup(
                         local_d_d_H[cID],
                         local_node,
@@ -920,7 +925,7 @@ __global__ void finalLevelWithEdgeWithLocalCacheKernel(
         }
     }
     __syncwarp();
-    if (local_aggreRead[warp_id] == 0) return;
+    if (!matchOnly && local_aggreRead[warp_id] == 0) return;
 
     // start traversing all candidates
     const uint32_t num_iters = (local_all_pred_neighbor_size[warp_id][local_shortest_neighbor[warp_id]] + WARP_SIZE - 1) / WARP_SIZE;
@@ -958,7 +963,7 @@ __global__ void finalLevelWithEdgeWithLocalCacheKernel(
         for (int j = 0; j < local_node.childCount; j++) {
             VertexID cID = local_node.children[j];
             if (local_node.childKeyPosCount[j] == 1 && local_node.childKeyPos[j][0] == depth) {
-                if (prob_vertex != UINT32_MAX) {
+                if (!matchOnly && prob_vertex != UINT32_MAX) {
                     cnt *= lookup(
                         local_d_d_H[cID],
                         local_node,
@@ -996,7 +1001,7 @@ __global__ void finalLevelWithEdgeWithLocalCacheKernel(
                                             src, dst);
             }
             if (local_node.childKeyPosCount[key] != 1) {
-                if (prob_vertex != UINT32_MAX) {
+                if (!matchOnly && prob_vertex != UINT32_MAX) {
                     cnt *= lookup(
                         local_d_d_H[local_node.children[key]],
                         local_node,
@@ -1014,7 +1019,9 @@ __global__ void finalLevelWithEdgeWithLocalCacheKernel(
             }
         }
         unsigned long long* h = reinterpret_cast<unsigned long long*>(local_d_d_H[nID]);
-        if (isRoot) {
+        if (matchOnly) {
+            if (prob_vertex != UINT32_MAX) aggregateWrite += cnt;
+        } else if (isRoot) {
             bool already_add_to_shared_mem = false;
             for (int j = 0; j < local_node.aggreVCount; j++) {
                 if (local_node.aggrePos[j] == depth) {
@@ -1098,7 +1105,7 @@ __global__ void finalLevelWithEdgeWithLocalCacheKernel(
         }
     }
     __syncwarp();
-    if (global_warp_id >= *failed_write) return;
+    if (!matchOnly && global_warp_id >= *failed_write) return;
 
     // accumulate the aggreWrite to the 0 position
     for (int offset = warpSize / 2; offset > 0; offset /= 2) {
@@ -1106,6 +1113,7 @@ __global__ void finalLevelWithEdgeWithLocalCacheKernel(
     }
     aggregateWrite = __shfl_sync(0xffffffff, aggregateWrite, 0);
     if (aggregateWrite == 0) return;
+    if (matchOnly) return;
     unsigned long long* h = reinterpret_cast<unsigned long long*>(local_d_d_H[nID]);
     if (isRoot) {
         if (lane_id < local_node.aggreVCount) {
@@ -1175,7 +1183,8 @@ __global__ void finalLevelKernel(
         bool isRoot,
         uint32_t numTreeNodes,
         uint32_t nID,
-        uint32_t prob_limit
+        uint32_t prob_limit,
+        bool matchOnly
 ) {
     __shared__ uint32_t local_partial_embedding[WARP_PER_BLOCK][MAX_PATTERN_SIZE + 2];
     __shared__ uint32_t* local_all_pred_neighbor[WARP_PER_BLOCK][MAX_PATTERN_SIZE];
@@ -1199,7 +1208,7 @@ __global__ void finalLevelKernel(
     uint32_t lane_id = threadIdx.x % WARP_SIZE;
 
     if (global_warp_id > embedding_size - 1) return;
-    if (global_warp_id > *failed_write) return;
+    if (!matchOnly && global_warp_id > *failed_write) return;
 
     if (lane_id < depth + index_len) {
         local_partial_embedding[warp_id][lane_id] = embedding[global_warp_id * (depth + index_len) + lane_id];
@@ -1284,7 +1293,7 @@ __global__ void finalLevelKernel(
             if (local_node.childKeyPos[j][0] == depth) {
                 key = prob_vertex;
             }
-            if (found) {
+            if (!matchOnly && found) {
                 cnt *= lookup(
                     local_d_d_H[cID],
                     local_node,
@@ -1301,7 +1310,9 @@ __global__ void finalLevelKernel(
             }
         }
         unsigned long long* h = reinterpret_cast<unsigned long long*>(local_d_d_H[nID]);
-        if (isRoot) {
+        if (matchOnly) {
+            continue;
+        } else if (isRoot) {
             for (int j = 0; j < local_node.aggreVCount; j++) {
                 uint32_t key = local_partial_embedding[warp_id][local_node.aggrePos[j] + index_len];
                 if (local_node.aggrePos[j] == depth) {
@@ -1350,7 +1361,8 @@ __global__ void finalLevelWithEdgeKernel(
         bool isRoot,
         uint32_t numTreeNodes,
         uint32_t nID,
-        uint32_t prob_limit
+        uint32_t prob_limit,
+        bool matchOnly
 ) {
     __shared__ uint32_t local_partial_embedding[WARP_PER_BLOCK][MAX_PATTERN_SIZE + 2];
     __shared__ uint32_t* local_all_pred_neighbor[WARP_PER_BLOCK][MAX_PATTERN_SIZE];
@@ -1377,7 +1389,7 @@ __global__ void finalLevelWithEdgeKernel(
     uint32_t lane_id = threadIdx.x % WARP_SIZE;
 
     if (global_warp_id > embedding_size - 1) return;
-    if (global_warp_id > *failed_write) return;
+    if (!matchOnly && global_warp_id > *failed_write) return;
     
     if (lane_id < depth + index_len) {
         local_partial_embedding[warp_id][lane_id] = embedding[global_warp_id * (depth + index_len) + lane_id];
@@ -1482,7 +1494,7 @@ __global__ void finalLevelWithEdgeKernel(
                 if (local_node.childKeyPos[j][0] == depth) {
                     key = prob_vertex;
                 }
-                if (prob_vertex != UINT32_MAX) {
+                if (!matchOnly && prob_vertex != UINT32_MAX) {
                     cnt *= lookup(
                         local_d_d_H[cID],
                         local_node,
@@ -1527,7 +1539,7 @@ __global__ void finalLevelWithEdgeKernel(
                     }
                 }
                 if (local_node.childKeyPosCount[key] != 1) {
-                    if (prob_vertex != UINT32_MAX) {
+                    if (!matchOnly && prob_vertex != UINT32_MAX) {
                         cnt *= lookup(
                             local_d_d_H[local_node.children[key]],
                             local_node,
@@ -1547,7 +1559,9 @@ __global__ void finalLevelWithEdgeKernel(
         }
 
         unsigned long long* h = reinterpret_cast<unsigned long long*>(local_d_d_H[nID]);
-        if (isRoot) {
+        if (matchOnly) {
+            continue;
+        } else if (isRoot) {
             for (int j = 0; j < local_node.aggreVCount; j++) {
                 uint32_t key = local_partial_embedding[warp_id][local_node.aggrePos[j] + index_len];
                 if (local_node.aggrePos[j] == depth) {

@@ -1,10 +1,42 @@
 #include "execution_gpu.h"
 
+#include <algorithm>
+#include <fstream>
 #include <stdexcept>
+#include <vector>
 
 namespace {
+enum class BatchScheduleMode {
+    Off,
+    Record,
+    Replay
+};
+
+enum class BatchScheduleHelper : uint32_t {
+    SimpleDecision = 1,
+    SimplePostChild = 2,
+    ComplexDecision = 3,
+    ComplexPostChild = 4,
+    ComplexSelfBreak = 5,
+    TrivialSelfBreak = 6
+};
+
+struct BatchScheduleRecord {
+    uint32_t helper;
+    uint32_t nID;
+    uint32_t level;
+    uint32_t nextLevelCount;
+    uint32_t start;
+    uint32_t end;
+    uint32_t shouldBreak;
+};
+
 bool gHashTableOccupancyProfileEnabled = false;
 uint64_t *gHashTableOccupancyCounters = nullptr;
+BatchScheduleMode gBatchScheduleMode = BatchScheduleMode::Off;
+std::vector<BatchScheduleRecord> gBatchScheduleRecords;
+size_t gBatchScheduleReplayPos = 0;
+std::string gBatchSchedulePath;
 
 void bindOccupancyCounters(uint64_t *counters) {
 #if ENABLE_OCCUPANCY_PROFILE
@@ -60,7 +92,137 @@ void recordOccupancyCounter(uint32_t nID, uint64_t totalBuckets) {
     (void)totalBuckets;
 #endif
 }
+
+void recordBatchScheduleDecision(
+    BatchScheduleHelper helper,
+    uint32_t nID,
+    uint32_t level,
+    uint32_t nextLevelCount,
+    uint32_t start,
+    uint32_t end,
+    bool shouldBreak = false
+) {
+    if (gBatchScheduleMode != BatchScheduleMode::Record) {
+        return;
+    }
+    gBatchScheduleRecords.push_back(BatchScheduleRecord{
+        static_cast<uint32_t>(helper),
+        nID,
+        level,
+        nextLevelCount,
+        start,
+        end,
+        shouldBreak ? 1u : 0u
+    });
+}
+
+bool replayBatchScheduleDecision(
+    BatchScheduleHelper helper,
+    uint32_t nID,
+    uint32_t level,
+    uint32_t nextLevelCount,
+    uint32_t start,
+    uint32_t &end,
+    bool *shouldBreak = nullptr
+) {
+    if (gBatchScheduleMode != BatchScheduleMode::Replay) {
+        return false;
+    }
+    if (gBatchScheduleReplayPos >= gBatchScheduleRecords.size()) {
+        throw std::runtime_error("batch schedule replay exhausted before traversal finished");
+    }
+
+    const BatchScheduleRecord &record = gBatchScheduleRecords[gBatchScheduleReplayPos++];
+    if (record.helper != static_cast<uint32_t>(helper) ||
+        record.nID != nID ||
+        record.level != level ||
+        record.nextLevelCount != nextLevelCount ||
+        record.start != start) {
+        throw std::runtime_error(
+            "batch schedule replay mismatch at record " + std::to_string(gBatchScheduleReplayPos - 1) +
+            ": expected helper=" + std::to_string(record.helper) +
+            ", nID=" + std::to_string(record.nID) +
+            ", level=" + std::to_string(record.level) +
+            ", nextLevelCount=" + std::to_string(record.nextLevelCount) +
+            ", start=" + std::to_string(record.start) +
+            "; got helper=" + std::to_string(static_cast<uint32_t>(helper)) +
+            ", nID=" + std::to_string(nID) +
+            ", level=" + std::to_string(level) +
+            ", nextLevelCount=" + std::to_string(nextLevelCount) +
+            ", start=" + std::to_string(start)
+        );
+    }
+    if (record.end > nextLevelCount || record.end < start) {
+        throw std::runtime_error("batch schedule replay contains an invalid range");
+    }
+
+    end = record.end;
+    if (shouldBreak != nullptr) {
+        *shouldBreak = record.shouldBreak != 0;
+    }
+    return true;
+}
 } // namespace
+
+void startBatchScheduleRecord(const std::string &path) {
+    gBatchScheduleMode = BatchScheduleMode::Record;
+    gBatchScheduleRecords.clear();
+    gBatchScheduleReplayPos = 0;
+    gBatchSchedulePath = path;
+}
+
+void startBatchScheduleReplay(const std::string &path) {
+    gBatchScheduleMode = BatchScheduleMode::Replay;
+    gBatchScheduleRecords.clear();
+    gBatchScheduleReplayPos = 0;
+    gBatchSchedulePath = path;
+
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        throw std::runtime_error("failed to open batch schedule replay file: " + path);
+    }
+    uint64_t count = 0;
+    in.read(reinterpret_cast<char*>(&count), sizeof(count));
+    if (!in) {
+        throw std::runtime_error("failed to read batch schedule replay header: " + path);
+    }
+    gBatchScheduleRecords.resize(count);
+    if (count != 0) {
+        in.read(reinterpret_cast<char*>(gBatchScheduleRecords.data()),
+                static_cast<std::streamsize>(count * sizeof(BatchScheduleRecord)));
+        if (!in) {
+            throw std::runtime_error("failed to read batch schedule replay records: " + path);
+        }
+    }
+}
+
+void finishBatchSchedule() {
+    if (gBatchScheduleMode == BatchScheduleMode::Record) {
+        std::ofstream out(gBatchSchedulePath, std::ios::binary);
+        if (!out) {
+            throw std::runtime_error("failed to open batch schedule record file: " + gBatchSchedulePath);
+        }
+        uint64_t count = gBatchScheduleRecords.size();
+        out.write(reinterpret_cast<const char*>(&count), sizeof(count));
+        if (count != 0) {
+            out.write(reinterpret_cast<const char*>(gBatchScheduleRecords.data()),
+                      static_cast<std::streamsize>(count * sizeof(BatchScheduleRecord)));
+        }
+        if (!out) {
+            throw std::runtime_error("failed to write batch schedule record file: " + gBatchSchedulePath);
+        }
+    } else if (gBatchScheduleMode == BatchScheduleMode::Replay &&
+               gBatchScheduleReplayPos != gBatchScheduleRecords.size()) {
+        throw std::runtime_error(
+            "batch schedule replay finished early: consumed " + std::to_string(gBatchScheduleReplayPos) +
+            " of " + std::to_string(gBatchScheduleRecords.size()) + " records"
+        );
+    }
+    gBatchScheduleMode = BatchScheduleMode::Off;
+    gBatchScheduleRecords.clear();
+    gBatchScheduleReplayPos = 0;
+    gBatchSchedulePath.clear();
+}
 
 void setHashTableOccupancyProfileEnabled(bool enabled) {
     if (enabled) {
@@ -165,7 +327,8 @@ void handleFinalLevel(
     AggregationTableWrapper &hashtables,
     uint32_t prob_limit,
     uint32_t index_len,
-    uint64_t* hd_failed_write
+    uint64_t* hd_failed_write,
+    bool matchOnly
 ) {
     if (t.getNode(nID).edgeKey) {
         finalLevelWithEdgeWithLocalCacheKernel<<<SDIV(source_count, WARP_PER_BLOCK), BLOCK_DIM>>>(
@@ -181,7 +344,8 @@ void handleFinalLevel(
             t.getRootID() == nID,
             t.getNumNodes(),
             nID,
-            prob_limit
+            prob_limit,
+            matchOnly
         );
     } else {
         finalLevelWithLocalCacheKernel<<<SDIV(source_count, WARP_PER_BLOCK), BLOCK_DIM>>>(
@@ -197,12 +361,13 @@ void handleFinalLevel(
             t.getRootID() == nID,
             t.getNumNodes(),
             nID,
-            prob_limit
+            prob_limit,
+            matchOnly
         );
     }
     cudaErrorCheck(cudaDeviceSynchronize());
     // if hd_failed_write is not UINT64_MAX, update it to the failed index
-    if (*hd_failed_write != UINT64_MAX) {
+    if (!matchOnly && *hd_failed_write != UINT64_MAX) {
         uint32_t new_end = 0;
         cudaErrorCheck(cudaMemcpy(&new_end, source + *hd_failed_write * (index_len + level) + h_node.indexPos[nID],
                         sizeof(uint32_t), cudaMemcpyDeviceToHost));
@@ -280,11 +445,12 @@ void trivalNodeHelper(
     uint32_t prob_limit,
     uint64_t target_memory_size,
     uint32_t index_len,
-    uint64_t* hd_failed_write
+    uint64_t* hd_failed_write,
+    bool matchOnly
 ) {
     if (level == t.getNode(nID).numVertices - 1 && source_count != 0) {
         handleFinalLevel(source, source_count, d_node, h_node, level, t, nID, hashtables,
-                        prob_limit, index_len, hd_failed_write);
+                        prob_limit, index_len, hd_failed_write, matchOnly);
         return;
     }
     SubgraphMatching iter(memory_manager, source, source_count, d_node,
@@ -293,8 +459,15 @@ void trivalNodeHelper(
         uint32_t next_level_count = 0;
         uint32_t* target = iter.next(next_level_count);
         trivalNodeHelper(target, next_level_count, memory_manager, dun, d_node, h_node, level + 1, t, nID,
-                        hashtables, prob_limit, target_memory_size, index_len, hd_failed_write);
-        if (*hd_failed_write != UINT64_MAX) {
+                        hashtables, prob_limit, target_memory_size, index_len, hd_failed_write, matchOnly);
+        bool shouldBreak = !matchOnly && *hd_failed_write != UINT64_MAX;
+        uint32_t replayEnd = next_level_count;
+        if (!replayBatchScheduleDecision(BatchScheduleHelper::TrivialSelfBreak, nID, level,
+                                         next_level_count, 0, replayEnd, &shouldBreak)) {
+            recordBatchScheduleDecision(BatchScheduleHelper::TrivialSelfBreak, nID, level,
+                                        next_level_count, 0, replayEnd, shouldBreak);
+        }
+        if (shouldBreak) {
             break;
         }
     }
@@ -320,7 +493,8 @@ void simpleTreeHelper(
     uint32_t partitionRootNodeID,
     std::vector<uint32_t>& steps,
     uint32_t batchSize,
-    std::vector<bool>& isSafeGuardMode
+    std::vector<bool>& isSafeGuardMode,
+    bool matchOnly
 ) {
     if (level == prefix_size) {
         return;
@@ -384,28 +558,40 @@ void simpleTreeHelper(
         } else {
             end = next_level_count;
         }
+        if (!replayBatchScheduleDecision(BatchScheduleHelper::SimpleDecision, partitionRootNodeID, level,
+                                         next_level_count, start, end)) {
+            recordBatchScheduleDecision(BatchScheduleHelper::SimpleDecision, partitionRootNodeID, level,
+                                        next_level_count, start, end);
+        }
         uint32_t original_end = end;
         for (uint32_t nID : nodesAtStep[level]) {
             // enumerate the node, pass target[start:end) with reference
             *hd_failed_write = UINT64_MAX;
-            hashtables.clearPartitionHashTable(nID);
-            resetOccupancyCounter(nID);
+            if (!matchOnly) {
+                hashtables.clearPartitionHashTable(nID);
+                resetOccupancyCounter(nID);
+            }
             trivalNodeHelper(target + start * (index_len + 1 + level), end - start, memory_manager, dun, d_nodes[nID], h_nodes[nID],
-                level + 1, t, nID, hashtables, prob_limit, target_memory_size, index_len, hd_failed_write);
-            if (nID != partitionRootNodeID) {
+                level + 1, t, nID, hashtables, prob_limit, target_memory_size, index_len, hd_failed_write, matchOnly);
+            if (!matchOnly && nID != partitionRootNodeID) {
                 recordOccupancyCounter(nID, hashtables.getPartitionHashTableBucketSize());
             }
             
             // update end if there is any insert failed
-            if (*hd_failed_write != UINT64_MAX) {
+            if (!matchOnly && *hd_failed_write != UINT64_MAX) {
                 end = *hd_failed_write;
+            }
+            if (!replayBatchScheduleDecision(BatchScheduleHelper::SimplePostChild, nID, level,
+                                             next_level_count, start, end)) {
+                recordBatchScheduleDecision(BatchScheduleHelper::SimplePostChild, nID, level,
+                                            next_level_count, start, end);
             }
         }
         // pass the target[start:end) to the next level
         simpleTreeHelper(prefix_node, prefix_size, target, next_level_count, memory_manager, dun,
                 d_nodes, h_nodes, level + 1, t, hashtables, prob_limit, target_memory_size, index_len,
-                nodesAtStep, hd_failed_write, partitionRootNodeID, steps, batchSize, isSafeGuardMode);
-        if (nodesAtStep[level].size() != 0) {
+                nodesAtStep, hd_failed_write, partitionRootNodeID, steps, batchSize, isSafeGuardMode, matchOnly);
+        if (!matchOnly && nodesAtStep[level].size() != 0) {
             const uint64_t attemptedBatchSize = original_end >= start ? original_end - start : 0;
             const uint64_t completedBatchSize = end >= start ? end - start : 0;
             bool safeguardTriggered = false;
@@ -462,7 +648,8 @@ void executePartitionGPU(
         float ratio,
         MemoryManager &memory_manager,
         const Graph &dun,
-        float executionMemoryPoolSize
+        float executionMemoryPoolSize,
+        bool matchOnly
 ) {
     const std::vector<std::vector<VertexID>> &globalOrder = t.getGlobalOrder();
     const std::vector<VertexID> &partitionOrder = globalOrder[pID];
@@ -522,7 +709,7 @@ void executePartitionGPU(
             uint64_t available_memory = memory_manager.getAvailableMemory();
             uint64_t target_memory_size = static_cast<uint64_t>(available_memory / (t.getNode(nID).numVertices - 1));
             trivalNodeHelper(nullptr, dun.getNumVertices(), memory_manager, dun, d_nodes[nID], h_nodes[nID], 0,
-                            t, nID, hashtables, prob_limit, target_memory_size, index_len, hd_failed_write);
+                            t, nID, hashtables, prob_limit, target_memory_size, index_len, hd_failed_write, matchOnly);
         }
         cudaErrorCheck(cudaFree(hd_failed_write));
         return;
@@ -561,7 +748,8 @@ void executePartitionGPU(
         VertexID nID = postOrder[i];
         nodesInPartition.push_back(nID);
     }
-    hashtables.allocatePartitionHashTable(t, memory_manager, hashTableSizeMemoryLimit, nodesInPartition, postOrder[endPos - 1]);
+    hashtables.allocatePartitionHashTable(t, memory_manager, hashTableSizeMemoryLimit, nodesInPartition,
+                                          postOrder[endPos - 1], matchOnly);
     NodeGPU h_prefix_node(partitionInterPos, partitionInPos, partitionOutPos, partitionUnPos, greaterPos, lessPos);
     NodeGPU* d_prefix_node = static_cast<NodeGPU*>(memory_manager.allocate(sizeof(NodeGPU), sizeof(uint32_t), "prefix node"));
     cudaErrorCheck(cudaMemcpy(d_prefix_node, &h_prefix_node, sizeof(NodeGPU), cudaMemcpyHostToDevice));
@@ -599,7 +787,8 @@ void executePartitionGPU(
         partitionRootNodeID,
         steps,
         batchSize,
-        isSafeGuardMode
+        isSafeGuardMode,
+        matchOnly
     );
     cudaErrorCheck(cudaFree(hd_failed_write));
     memory_manager.release(d_prefix_node);
@@ -613,18 +802,19 @@ void  executeTreeGPU (
         MemoryManager &memory_manager,
         const uint32_t prob_limit,
         float ratio,
-        float executionMemoryPoolSize
+        float executionMemoryPoolSize,
+        bool matchOnly
 ) {
 
     /*************************** create the hashtable in the device memory **************************/
 #if HASH_TABLE_TYPE == 0
-    WarpcoreWrapper hashtables(t, memory_manager, dun);
+    WarpcoreWrapper hashtables(t, memory_manager, dun, matchOnly);
 #elif HASH_TABLE_TYPE == 1
-    LockFreeHashTableWrapper hashtables(t, memory_manager, dun);
+    LockFreeHashTableWrapper hashtables(t, memory_manager, dun, matchOnly);
 #elif HASH_TABLE_TYPE == 2
-    LockBasedHashTableWrapper hashtables(t, memory_manager, dun);
+    LockBasedHashTableWrapper hashtables(t, memory_manager, dun, matchOnly);
 #elif HASH_TABLE_TYPE == 3
-    DenseArrayWrapper hashtables(t, memory_manager, dun);
+    DenseArrayWrapper hashtables(t, memory_manager, dun, matchOnly);
 #endif
     allocateOccupancyCounters(t.getNumNodes());
 
@@ -641,12 +831,14 @@ void  executeTreeGPU (
     /*************************** start compute each partitions **************************/
     for (VertexID pID = 0; pID < t.getPartitionPos().size(); ++pID) {
         executePartitionGPU(pID, t, hashtables, d_nodes, h_nodes, prob_limit, ratio, memory_manager, dun,
-                            executionMemoryPoolSize);
+                            executionMemoryPoolSize, matchOnly);
     }
 
     /********* copy the hash table to the host memory *********/
-    cudaErrorCheck(cudaMemcpy(H[t.getRootID()], hashtables.getHashTableHostPointer()[t.getRootID()],
-                    (dun.getNumEdges() + 1) * sizeof(uint64_t), cudaMemcpyDeviceToHost));
+    if (!matchOnly) {
+        cudaErrorCheck(cudaMemcpy(H[t.getRootID()], hashtables.getHashTableHostPointer()[t.getRootID()],
+                        (dun.getNumEdges() + 1) * sizeof(uint64_t), cudaMemcpyDeviceToHost));
+    }
     /*************************** release the memory **************************/
     for (int nID = t.getNumNodes() - 1; nID >= 0; nID--) {
         memory_manager.release(d_nodes[nID]);
@@ -693,8 +885,12 @@ void complexTreeHelper(
     uint32_t partitionRootNodeID,
     std::vector<std::vector<uint32_t>> &steps,
     uint32_t batchSize,
-    std::vector<std::vector<bool>> &isSafeGuardMode) {
+    std::vector<std::vector<bool>> &isSafeGuardMode,
+    bool matchOnly) {
     if (level == t.getNode(nID).numVertices && source_count != 0) {
+        if (matchOnly) {
+            return;
+        }
         handleFinalLevelFullEnumeration(source, source_count, d_nodes[nID], h_nodes[nID], level, t, nID, hashtables,
             prob_limit, index_len, hd_failed_write);
         return;
@@ -759,6 +955,11 @@ void complexTreeHelper(
         } else {
             end = next_level_count;
         }
+        if (!replayBatchScheduleDecision(BatchScheduleHelper::ComplexDecision, nID, level,
+                                         next_level_count, start, end)) {
+            recordBatchScheduleDecision(BatchScheduleHelper::ComplexDecision, nID, level,
+                                        next_level_count, start, end);
+        }
         uint32_t original_end = end;
         for (uint32_t cID : t.getNodesAtStep()[nID][level]) {
             // enumerate the node, pass target[start:end) with reference
@@ -775,28 +976,43 @@ void complexTreeHelper(
                 d_nodes[cID],
                 level);
             cudaErrorCheck(cudaDeviceSynchronize());
-            hashtables.clearPartitionHashTable(cID);
-            resetOccupancyCounter(cID);
+            if (!matchOnly) {
+                hashtables.clearPartitionHashTable(cID);
+                resetOccupancyCounter(cID);
+            }
             complexTreeHelper(cID, copied_target, end - start, memory_manager, dun, d_nodes, h_nodes,
                             h_nodes[cID].prefixPosCount, t, hashtables, prob_limit, target_memory_size,
-                        index_len, hd_failed_write, partitionRootNodeID, steps, batchSize, isSafeGuardMode);
+                        index_len, hd_failed_write, partitionRootNodeID, steps, batchSize, isSafeGuardMode,
+                        matchOnly);
             // release copy prefix
             memory_manager.release(copied_target);
-            if (cID != partitionRootNodeID) {
+            if (!matchOnly && cID != partitionRootNodeID) {
                 recordOccupancyCounter(cID, hashtables.getPartitionHashTableBucketSize());
             }
 
             // update end if there is any insert failed
-            if (*hd_failed_write != UINT64_MAX) {
+            if (!matchOnly && *hd_failed_write != UINT64_MAX) {
                 end = *hd_failed_write;
                 *hd_failed_write = UINT64_MAX;
+            }
+            if (!replayBatchScheduleDecision(BatchScheduleHelper::ComplexPostChild, cID, level,
+                                             next_level_count, start, end)) {
+                recordBatchScheduleDecision(BatchScheduleHelper::ComplexPostChild, cID, level,
+                                            next_level_count, start, end);
             }
         }
         // pass the target[start:end) to the next level
         complexTreeHelper(nID, target + start * (index_len + level + 1), end - start, memory_manager, dun,
                         d_nodes, h_nodes, level + 1, t, hashtables, prob_limit, target_memory_size, 
-                        index_len, hd_failed_write, partitionRootNodeID, steps, batchSize, isSafeGuardMode);
-        if (t.getNodesAtStep()[nID][level].size() != 0) {
+                        index_len, hd_failed_write, partitionRootNodeID, steps, batchSize, isSafeGuardMode,
+                        matchOnly);
+        bool shouldBreak = !matchOnly && *hd_failed_write != UINT64_MAX;
+        if (!replayBatchScheduleDecision(BatchScheduleHelper::ComplexSelfBreak, nID, level,
+                                         next_level_count, start, end, &shouldBreak)) {
+            recordBatchScheduleDecision(BatchScheduleHelper::ComplexSelfBreak, nID, level,
+                                        next_level_count, start, end, shouldBreak);
+        }
+        if (!matchOnly && t.getNodesAtStep()[nID][level].size() != 0) {
             const uint64_t attemptedBatchSize = original_end >= start ? original_end - start : 0;
             const uint64_t completedBatchSize = end >= start ? end - start : 0;
             bool safeguardTriggered = false;
@@ -840,7 +1056,7 @@ void complexTreeHelper(
             // ------------ safeguard ------------//
             record_restart_profile_batch(attemptedBatchSize, completedBatchSize, safeguardTriggered);
         }
-        if (*hd_failed_write != UINT64_MAX) {
+        if (shouldBreak) {
             break;
         }
     }
@@ -853,15 +1069,16 @@ void multiJoinTreeGPU(
         MemoryManager &memory_manager,
         uint32_t prob_limit,
         float ratio,
-        float executionMemoryPoolSize) {
+        float executionMemoryPoolSize,
+        bool matchOnly) {
 #if HASH_TABLE_TYPE == 0
-    WarpcoreWrapper hashtables(t, memory_manager, dun);
+    WarpcoreWrapper hashtables(t, memory_manager, dun, matchOnly);
 #elif HASH_TABLE_TYPE == 1
-    LockFreeHashTableWrapper hashtables(t, memory_manager, dun);
+    LockFreeHashTableWrapper hashtables(t, memory_manager, dun, matchOnly);
 #elif HASH_TABLE_TYPE == 2
-    LockBasedHashTableWrapper hashtables(t, memory_manager, dun);
+    LockBasedHashTableWrapper hashtables(t, memory_manager, dun, matchOnly);
 #elif HASH_TABLE_TYPE == 3
-    DenseArrayWrapper hashtables(t, memory_manager, dun);
+    DenseArrayWrapper hashtables(t, memory_manager, dun, matchOnly);
 #endif
     allocateOccupancyCounters(t.getNumNodes());
     
@@ -924,7 +1141,8 @@ void multiJoinTreeGPU(
                 std::cout <<" WARNING: The hash table size is very small. Please consider setting a smaller ratio value or allocate more memory for this program" << std::endl;
             }
             update_aggregation_hash_table_stats(hashTableSizeMemoryLimit, numHashTable);
-            hashtables.allocatePartitionHashTable(t, memory_manager, hashTableSizeMemoryLimit, partition, rootNodeID);
+            hashtables.allocatePartitionHashTable(t, memory_manager, hashTableSizeMemoryLimit, partition, rootNodeID,
+                                                  matchOnly);
 
             // get the largest node
             std::vector<uint32_t> nodeCallingSizes(t.getNumNodes(), 0);
@@ -942,11 +1160,13 @@ void multiJoinTreeGPU(
             std::vector<std::vector<bool>> isSafeGuardMode(t.getNumNodes(), std::vector<bool>(MAX_PATTERN_SIZE, false));
             complexTreeHelper(rootNodeID, nullptr, dun.getNumVertices(), memory_manager, dun, d_nodes, h_nodes,
                             0, t, hashtables, prob_limit, target_memory_size, index_len, hd_failed_write, rootNodeID,
-                            steps, batchSize, isSafeGuardMode);
+                            steps, batchSize, isSafeGuardMode, matchOnly);
             
             /********* copy the hash table to the host memory *********/
-            cudaErrorCheck(cudaMemcpy(H[rootNodeID], hashtables.getHashTableHostPointer()[rootNodeID],
-                            (dun.getNumEdges() + 1) * sizeof(uint64_t), cudaMemcpyDeviceToHost));
+            if (!matchOnly) {
+                cudaErrorCheck(cudaMemcpy(H[rootNodeID], hashtables.getHashTableHostPointer()[rootNodeID],
+                                (dun.getNumEdges() + 1) * sizeof(uint64_t), cudaMemcpyDeviceToHost));
+            }
             
             /********* release memory *********/
             cudaErrorCheck(cudaFree(hd_failed_write));

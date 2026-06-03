@@ -217,8 +217,64 @@ The following arguments are available for fine-tuning performance.
 | `-mem` | Total device memory budget (in GB). **Default: 90% of available memory**. |
 | `-exec-mem` | Execution workspace memory budget (in GB). This limits the memory used inside each tree execution, including subgraph-enumeration buffers and aggregation tables. **Default: 0**, meaning no separate execution cap beyond `-mem`. |
 | `-ratio` | Ratio between memory for Subgraph Enumeration (SE) and Hash Table (HT). **Default: 1**. |
-| `-profile-reset` | Measure GPU table reset time, calls, and bytes in stdout. Disabled by default and intended only for profiling/time-breakdown experiments. |
 | `-occupancy-profile` | Print average hash-table occupancy in stdout. This requires building with `-DENABLE_OCCUPANCY_PROFILE=ON` and is currently supported for the lock-free hash-table build (`HASH_TABLE_TYPE=1`) only. |
+
+### Time-Breakdown Profiling
+
+The following options are intended for reproducing the component-level time-breakdown experiments. They are disabled by default for normal runs.
+
+| Option | Description |
+| --- | --- |
+| `-profile-reset` | Measure GPU table reset time, calls, and bytes in stdout. |
+| `-record-batch-schedule <path>` | Write the adaptive GPU batch schedule to a binary file or directory. In batch-query mode, one `.schedule.bin` file is written per query. |
+| `-replay-batch-schedule <path>` | Replay a previously recorded adaptive GPU batch schedule from a binary file or directory. |
+| `-match-only` | Run without any table-reset and join-aggregation operations. This option must be used together with `-replay-batch-schedule`. |
+
+We use these options to keep the adaptive batch decisions fixed when measuring different components. For the reported time breakdown, we use three timing sources.
+
+First, run the normal computation without profiling flags. This gives the clean total runtime:
+
+```shell
+./build/executable/scope.out \
+  -q ./exp/pattern_graph/5voc/ \
+  -d ./exp/data_graph/web-spam.txt \
+  -r ./result/web-spam/5voc/ \
+  -b
+```
+
+Second, run the normal computation with reset profiling and record the batch schedule. This run is used to measure table-reset time and to save the schedule; its total runtime is not used as the clean total runtime in the reported breakdown:
+
+```shell
+./build/executable/scope.out \
+  -q ./exp/pattern_graph/5voc/ \
+  -d ./exp/data_graph/web-spam.txt \
+  -r ./result/web-spam/5voc/ \
+  -b \
+  -profile-reset \
+  -record-batch-schedule ./result/web-spam/5voc_schedule/
+```
+
+Third, replay the same batch schedule in match-only mode to measure subgraph enumeration under the same batch decisions:
+
+```shell
+./build/executable/scope.out \
+  -q ./exp/pattern_graph/5voc/ \
+  -d ./exp/data_graph/web-spam.txt \
+  -b \
+  -replay-batch-schedule ./result/web-spam/5voc_schedule/ \
+  -match-only
+```
+
+The component times are computed as:
+
+```text
+Total = clean normal runtime
+SM    = match-only replay runtime
+Reset = table-reset time from the profiled normal-record run
+JA    = Total - SM - Reset
+```
+
+For quick local checks, the profiled normal-record run can also provide an approximate total runtime, but the reported figures use the clean normal runtime when available.
 
 ## Comparison
 

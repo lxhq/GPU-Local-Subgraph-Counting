@@ -21,7 +21,10 @@ enum OptionKeyword {
     MemoryPool = 9,          // -mem, the size of memory pool in GB
     ExecutionMemoryPool = 10, // -exec-mem, execution memory budget in GB
     ProfileReset = 11,        // -profile-reset, profile GPU table reset time
-    OccupancyProfile = 12     // -occupancy-profile, profile hash-table occupancy
+    OccupancyProfile = 12,    // -occupancy-profile, profile hash-table occupancy
+    RecordBatchSchedule = 13, // -record-batch-schedule, write adaptive GPU batch schedule
+    ReplayBatchSchedule = 14, // -replay-batch-schedule, replay adaptive GPU batch schedule
+    MatchOnly = 15            // -match-only, run without table reset and join aggregation
 };
 
 class Command : public CommandParser {
@@ -84,6 +87,18 @@ public:
 
     bool getOccupancyProfile() {
         return booleanOptionValue[OptionKeyword::OccupancyProfile];
+    }
+
+    std::string getRecordBatchSchedulePath() {
+        return optionsValue[OptionKeyword::RecordBatchSchedule];
+    }
+
+    std::string getReplayBatchSchedulePath() {
+        return optionsValue[OptionKeyword::ReplayBatchSchedule];
+    }
+
+    bool getMatchOnly() {
+        return booleanOptionValue[OptionKeyword::MatchOnly];
     }
 };
 

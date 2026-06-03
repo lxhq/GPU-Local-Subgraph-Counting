@@ -6,6 +6,41 @@
 #include "execution.h"
 #include "execution_gpu.h"
 
+#include <filesystem>
+#include <stdexcept>
+
+namespace {
+std::string schedulePathForQuery(
+    const std::string &basePath,
+    bool batchQuery,
+    const std::string &queryGraphPath,
+    const std::string &queryFile
+) {
+    if (basePath.empty()) {
+        return "";
+    }
+
+    namespace fs = std::filesystem;
+    fs::path base(basePath);
+    bool useDirectory = batchQuery;
+    if (!useDirectory) {
+        char last = basePath.back();
+        useDirectory = last == '/' || last == '\\' || (fs::exists(base) && fs::is_directory(base));
+    }
+
+    if (useDirectory) {
+        fs::create_directories(base);
+        std::string fileName = batchQuery ? queryFile : fs::path(queryGraphPath).filename().string();
+        return (base / (fileName + ".schedule.bin")).string();
+    }
+
+    if (base.has_parent_path()) {
+        fs::create_directories(base.parent_path());
+    }
+    return base.string();
+}
+} // namespace
+
 void printKernelFunctionInformation(const void* kernelFunc) {
     int numBlocksPerSM = 0;
     cudaError_t status = cudaOccupancyMaxActiveBlocksPerMultiprocessor(
@@ -49,6 +84,27 @@ int main(int argc, char **argv) {
     float execution_memory_pool_size = cmd.getExecutionMemoryPoolSize();
     bool profileReset = cmd.getProfileReset();
     bool occupancyProfile = cmd.getOccupancyProfile();
+    bool matchOnly = cmd.getMatchOnly();
+    std::string recordBatchSchedulePath = cmd.getRecordBatchSchedulePath();
+    std::string replayBatchSchedulePath = cmd.getReplayBatchSchedulePath();
+    if (!recordBatchSchedulePath.empty() && !replayBatchSchedulePath.empty()) {
+        throw std::runtime_error("use only one of -record-batch-schedule or -replay-batch-schedule");
+    }
+    if (matchOnly && replayBatchSchedulePath.empty()) {
+        throw std::runtime_error("-match-only requires -replay-batch-schedule");
+    }
+    if (matchOnly && shareNode) {
+        throw std::runtime_error("-match-only is currently supported for non-share GPU execution only");
+    }
+    if (matchOnly && profileReset) {
+        throw std::runtime_error("-profile-reset should be used with normal execution, not -match-only");
+    }
+    if (matchOnly && occupancyProfile) {
+        throw std::runtime_error("-occupancy-profile should be used with normal execution, not -match-only");
+    }
+    if (matchOnly) {
+        resultPath.clear();
+    }
     setGpuResetProfileEnabled(profileReset);
     setHashTableOccupancyProfileEnabled(occupancyProfile);
     std::cout << "query graph path: " << queryGraphPath << std::endl;
@@ -56,12 +112,17 @@ int main(int argc, char **argv) {
     std::cout << "result path: " << resultPath << std::endl;
     std::cout << "using batch query: " << batchQuery << std::endl;
     std::cout << "sharing nodes computation: " << shareNode << std::endl;
+    if (matchOnly) {
+        std::cout << "matching-only dry run: 1" << std::endl;
+    }
     std::cout << "using triangle: " << useTriangle << std::endl;
     std::cout << "set intersection type: " << SI << std::endl;
     std::cout << "max memory pool size: " << memory_pool_size << " GB" << std::endl;
     std::cout << "execution memory budget: " << execution_memory_pool_size << " GB" << std::endl;
     std::cout << "profile reset time: " << profileReset << std::endl;
     std::cout << "occupancy profile: " << occupancyProfile << std::endl;
+    std::cout << "record batch schedule path: " << recordBatchSchedulePath << std::endl;
+    std::cout << "replay batch schedule path: " << replayBatchSchedulePath << std::endl;
     std::cout << "subgraph matching hashtable ratio: " << ratio << std::endl;
     std::cout << "prob limit: " << prob_limit << std::endl;
     std::cout << "hash table type: " << HASH_TABLE_TYPE << std::endl;
@@ -259,6 +320,17 @@ int main(int argc, char **argv) {
             if (profileReset) {
                 resetGpuResetProfile();
             }
+            std::string queryRecordBatchSchedulePath = schedulePathForQuery(
+                recordBatchSchedulePath, batchQuery, queryGraphPath, batchQuery ? files[i] : ""
+            );
+            std::string queryReplayBatchSchedulePath = schedulePathForQuery(
+                replayBatchSchedulePath, batchQuery, queryGraphPath, batchQuery ? files[i] : ""
+            );
+            if (!queryRecordBatchSchedulePath.empty()) {
+                startBatchScheduleRecord(queryRecordBatchSchedulePath);
+            } else if (!queryReplayBatchSchedulePath.empty()) {
+                startBatchScheduleReplay(queryReplayBatchSchedulePath);
+            }
             start = std::chrono::steady_clock::now();
             // Count* H. The LSC result is stored in H
             HashTable H;
@@ -266,15 +338,15 @@ int main(int argc, char **argv) {
             orbitTypes[i] = orbitType;
             if (orbitType == 0) {
                 H = new Count[1];
-                H[0] = 0;
+                if (!matchOnly) H[0] = 0;
             }
             else if (orbitType == 1) {
                 H = new Count[dun.getNumVertices()];
-                memset(H, 0, sizeof(Count) * n);
+                if (!matchOnly) memset(H, 0, sizeof(Count) * n);
             }
             else {
                 H = new Count[m];
-                memset(H, 0, sizeof(Count) * m);
+                if (!matchOnly) memset(H, 0, sizeof(Count) * m);
             }
             if (cn.num != 0) {
                 Pattern p(patternGraphs[i]);
@@ -313,11 +385,11 @@ int main(int argc, char **argv) {
             } else {
                 for (auto it = patterns.begin(); it != patterns.end(); ++it) {
                     int divideFactor = it->first;
-                    memset(factorSum, 0, sizeof(Count) * (m + 1));
+                    if (!matchOnly) memset(factorSum, 0, sizeof(Count) * (m + 1));
                     for (int j = 0; j < it->second.size(); ++j) {
                         for (int j2 = 0; j2 < trees[divideFactor][j].size(); ++j2) {
                             for (int l = 0; l < trees[divideFactor][j][0].getNumNodes(); ++l) {
-                                memset(ht[l], 0, sizeof(Count) * m);
+                                if (!matchOnly) memset(ht[l], 0, sizeof(Count) * m);
                             }
                             int k = patterns[divideFactor][j].u.getNumVertices();
 // TODO: 
@@ -327,7 +399,7 @@ int main(int argc, char **argv) {
                                 mkspecial(sg, k);
                                 kclique(k, k, sg, cliqueVertices, h, orbitType);
                                 freesub(sg, k);
-                                if (aggreWeight != 1) {
+                                if (!matchOnly && aggreWeight != 1) {
                                     if (orbitType == 0) h[0] *= aggreWeight;
                                     else if (orbitType == 1) {
                                         for (VertexID v = 0; v < n; ++v)
@@ -362,7 +434,7 @@ int main(int argc, char **argv) {
                                     //             visited[0], candPos, tmp, allV);
                                     // auto start = std::chrono::steady_clock::now();
                                     executeTreeGPU(t, dun, ht, memory_manager, prob_limit, ratio,
-                                                   execution_memory_pool_size);
+                                                   execution_memory_pool_size, matchOnly);
                                     // auto end = std::chrono::steady_clock::now();
                                     // std::chrono::duration<double> elapsedSeconds = end - start;
                                     // std::cout << "execution time: " << elapsedSeconds.count() << "s" << std::endl << std::endl;
@@ -371,7 +443,7 @@ int main(int argc, char **argv) {
                                     // multiJoinTree(t, din, dout, dun, useTriangle, triangle, patterns[divideFactor][j],
                                     //             ht, outID, unID, reverseID, startOffset, patternV, dataV, visited, tmp, allV);
                                     multiJoinTreeGPU(t, dun, ht, memory_manager, prob_limit, ratio,
-                                                     execution_memory_pool_size);
+                                                     execution_memory_pool_size, matchOnly);
                                 }
                             }
                             // ht is the cout for each node. here h is the count for the root node
@@ -388,7 +460,7 @@ int main(int argc, char **argv) {
 // exit(0);
 /********** Debug *******/
                             int multiFactor = trees[divideFactor][j][j2].getMultiFactor();
-                            if (!resultPath.empty()) {
+                            if (!matchOnly && !resultPath.empty()) {
                                 if (orbitType == 0) factorSum[0] += h[0];
                                 else if (orbitType == 1)
                                     for (VertexID l = 0; l < n; ++l) {
@@ -435,9 +507,11 @@ int main(int argc, char **argv) {
             end = std::chrono::steady_clock::now();
             elapsedSeconds = end - start;
             exeTime = elapsedSeconds.count();
+            finishBatchSchedule();
             if (batchQuery)
                 std::cout << "file: " << files[i] << ", ";
-            std::cout << "execution time: " << exeTime << "s";
+            if (matchOnly) std::cout << "match-only execution time: " << exeTime << "s";
+            else std::cout << "execution time: " << exeTime << "s";
             ui numPatterns = 0;
             for (auto it = patterns.begin(); it != patterns.end(); ++it)
                 numPatterns += it->second.size();

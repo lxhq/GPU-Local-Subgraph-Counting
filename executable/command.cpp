@@ -17,6 +17,9 @@ Command::Command(int argc, char **argv) : CommandParser(argc, argv){
     optionsKey[OptionKeyword::ExecutionMemoryPool] = "-exec-mem";
     optionsKey[OptionKeyword::ProfileReset] = "-profile-reset";
     optionsKey[OptionKeyword::OccupancyProfile] = "-occupancy-profile";
+    optionsKey[OptionKeyword::RecordBatchSchedule] = "-record-batch-schedule";
+    optionsKey[OptionKeyword::ReplayBatchSchedule] = "-replay-batch-schedule";
+    optionsKey[OptionKeyword::MatchOnly] = "-match-only";
     floatOptionValue[OptionKeyword::HashtableSizeFactor] = 1.0;
     floatOptionValue[OptionKeyword::ExecutionMemoryPool] = 0.0;
     intOptionValue[OptionKeyword::ProbLimit] = 64;
@@ -25,6 +28,7 @@ Command::Command(int argc, char **argv) : CommandParser(argc, argv){
     booleanOptionValue[OptionKeyword::ShareNode] = false;
     booleanOptionValue[OptionKeyword::ProfileReset] = false;
     booleanOptionValue[OptionKeyword::OccupancyProfile] = false;
+    booleanOptionValue[OptionKeyword::MatchOnly] = false;
     processOptions();
 }
 
@@ -33,6 +37,8 @@ void Command::processOptions() {
     optionsValue[OptionKeyword::DataGraphPath] = getCommandOption(optionsKey[OptionKeyword::DataGraphPath]);
     optionsValue[OptionKeyword::TrianglePath] = getCommandOption(optionsKey[OptionKeyword::TrianglePath]);
     optionsValue[OptionKeyword::ResultPath] = getCommandOption(optionsKey[OptionKeyword::ResultPath]);
+    optionsValue[OptionKeyword::RecordBatchSchedule] = getCommandOption(optionsKey[OptionKeyword::RecordBatchSchedule]);
+    optionsValue[OptionKeyword::ReplayBatchSchedule] = getCommandOption(optionsKey[OptionKeyword::ReplayBatchSchedule]);
     if (commandOptionExists(optionsKey[OptionKeyword::HashtableSizeFactor])) {
         floatOptionValue[OptionKeyword::HashtableSizeFactor] = std::stof(getCommandOption(optionsKey[OptionKeyword::HashtableSizeFactor]));
     }
@@ -49,4 +55,5 @@ void Command::processOptions() {
     booleanOptionValue[OptionKeyword::ShareNode] = commandOptionExists(optionsKey[OptionKeyword::ShareNode]);
     booleanOptionValue[OptionKeyword::ProfileReset] = commandOptionExists(optionsKey[OptionKeyword::ProfileReset]);
     booleanOptionValue[OptionKeyword::OccupancyProfile] = commandOptionExists(optionsKey[OptionKeyword::OccupancyProfile]);
+    booleanOptionValue[OptionKeyword::MatchOnly] = commandOptionExists(optionsKey[OptionKeyword::MatchOnly]);
 }

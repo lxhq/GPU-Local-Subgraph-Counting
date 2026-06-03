@@ -84,7 +84,7 @@ void gpuProfiledMemset(void *ptr, int value, size_t bytes, GpuResetKind kind) {
 }
 
 // --------------------- warpcore wrapper --------------------- //
-WarpcoreWrapper::WarpcoreWrapper(const Tree &t, MemoryManager &memory_manager, const DataGraph &dun) : AggregationTableWrapper(t, memory_manager, dun) {
+WarpcoreWrapper::WarpcoreWrapper(const Tree &t, MemoryManager &memory_manager, const DataGraph &dun, bool matchOnly) : AggregationTableWrapper(t, memory_manager, dun, matchOnly) {
     this->d_d_partition_H = static_cast<warpcore::CountingHashTable<>**>(
         memory_manager.allocate(t.getNumNodes() * sizeof(warpcore::CountingHashTable<>*), sizeof(warpcore::CountingHashTable<>*), "d_d_partition_H")
     );
@@ -96,7 +96,8 @@ WarpcoreWrapper::WarpcoreWrapper(const Tree &t, MemoryManager &memory_manager, c
 
 void WarpcoreWrapper::allocatePartitionHashTable(const Tree& t, MemoryManager &memory_manager,
                                                     uint64_t hashtableSize, std::vector<uint32_t>& nodesInPartition,
-                                                    uint32_t parititionRootNode) {
+                                                    uint32_t parititionRootNode, bool matchOnly) {
+    (void)matchOnly;
     this->partitionHashtableBuckets = hashtableSize / sizeof(warpcore::storage::key_value::detail::pair_t<uint64_t, uint64_t>);
     this->partitionHashtableBuckets = warpcore::detail::get_valid_max_capacity(this->partitionHashtableBuckets,warpcore::CountingHashTable<>::cg_size());
     this->partitionHashtableSize = this->partitionHashtableBuckets * sizeof(warpcore::storage::key_value::detail::pair_t<uint64_t, uint64_t>);
@@ -152,7 +153,7 @@ void** WarpcoreWrapper::getPartitionHashTableHostPointer() {
     return reinterpret_cast<void**>(this->h_d_partition_H.data());
 }
 // --------------------- lock free hash table wrapper --------------------- //
-LockFreeHashTableWrapper::LockFreeHashTableWrapper(const Tree &t, MemoryManager &memory_manager, const DataGraph &dun) : AggregationTableWrapper(t, memory_manager, dun) {
+LockFreeHashTableWrapper::LockFreeHashTableWrapper(const Tree &t, MemoryManager &memory_manager, const DataGraph &dun, bool matchOnly) : AggregationTableWrapper(t, memory_manager, dun, matchOnly) {
     this->d_d_partition_H = static_cast<uint64_t**>(
         memory_manager.allocate(t.getNumNodes() * sizeof(uint64_t*), sizeof(uint64_t*), "d_d_partition_H")
     );
@@ -163,7 +164,7 @@ LockFreeHashTableWrapper::LockFreeHashTableWrapper(const Tree &t, MemoryManager 
 
 void LockFreeHashTableWrapper::allocatePartitionHashTable(const Tree& t, MemoryManager &memory_manager,
                                                     uint64_t hashtableSize, std::vector<uint32_t>& nodesInPartition,
-                                                    uint32_t parititionRootNode) {
+                                                    uint32_t parititionRootNode, bool matchOnly) {
     this->partitionHashtableBuckets = hashtableSize / (2 * sizeof(uint64_t));
     this->partitionHashtableBuckets = largestPrimeBucketCount(this->partitionHashtableBuckets);
     this->partitionHashtableSize = this->partitionHashtableBuckets * (2 * sizeof(uint64_t));
@@ -173,7 +174,9 @@ void LockFreeHashTableWrapper::allocatePartitionHashTable(const Tree& t, MemoryM
             continue;
         }
         void* d_partition_H = memory_manager.allocate(this->partitionHashtableSize, sizeof(uint64_t), "d_partition_H " + std::to_string(nID));
-        gpuProfiledMemset(d_partition_H, 0, this->partitionHashtableSize, GpuResetKind::InitialZero);
+        if (!matchOnly) {
+            gpuProfiledMemset(d_partition_H, 0, this->partitionHashtableSize, GpuResetKind::InitialZero);
+        }
         cudaErrorCheck(cudaMemcpy(this->d_d_partition_H + nID, &d_partition_H, sizeof(void*), cudaMemcpyHostToDevice));
         this->h_d_partition_H[nID] = static_cast<uint64_t*>(d_partition_H);
     }
@@ -212,7 +215,7 @@ void** LockFreeHashTableWrapper::getPartitionHashTableHostPointer() {
 }
 
 // --------------------- lock based hash table wrapper --------------------- //
-LockBasedHashTableWrapper::LockBasedHashTableWrapper(const Tree &t, MemoryManager &memory_manager, const DataGraph &dun) : AggregationTableWrapper(t, memory_manager, dun) {
+LockBasedHashTableWrapper::LockBasedHashTableWrapper(const Tree &t, MemoryManager &memory_manager, const DataGraph &dun, bool matchOnly) : AggregationTableWrapper(t, memory_manager, dun, matchOnly) {
     this->d_d_partition_H = static_cast<uint64_t**>(
         memory_manager.allocate(t.getNumNodes() * sizeof(uint64_t*), sizeof(uint64_t*), "d_d_partition_H")
     );
@@ -223,7 +226,7 @@ LockBasedHashTableWrapper::LockBasedHashTableWrapper(const Tree &t, MemoryManage
 
 void LockBasedHashTableWrapper::allocatePartitionHashTable(const Tree& t, MemoryManager &memory_manager,
                                                     uint64_t hashtableSize, std::vector<uint32_t>& nodesInPartition,
-                                                    uint32_t parititionRootNode) {
+                                                    uint32_t parititionRootNode, bool matchOnly) {
     this->partitionHashtableBuckets = hashtableSize / (6 * sizeof(uint64_t));
     this->partitionHashtableBuckets = largestPrimeBucketCount(this->partitionHashtableBuckets);
     this->partitionHashtableSize = this->partitionHashtableBuckets * (6 * sizeof(uint64_t));
@@ -233,7 +236,9 @@ void LockBasedHashTableWrapper::allocatePartitionHashTable(const Tree& t, Memory
             continue;
         }
         void* d_partition_H = memory_manager.allocate(this->partitionHashtableSize, sizeof(uint64_t), "d_partition_H " + std::to_string(nID));
-        gpuProfiledMemset(d_partition_H, 0, this->partitionHashtableSize, GpuResetKind::InitialZero);
+        if (!matchOnly) {
+            gpuProfiledMemset(d_partition_H, 0, this->partitionHashtableSize, GpuResetKind::InitialZero);
+        }
         cudaErrorCheck(cudaMemcpy(this->d_d_partition_H + nID, &d_partition_H, sizeof(void*), cudaMemcpyHostToDevice));
         this->h_d_partition_H[nID] = static_cast<uint64_t*>(d_partition_H);
     }
@@ -271,7 +276,7 @@ void** LockBasedHashTableWrapper::getPartitionHashTableHostPointer() {
 }
 
 // ------------------------- dense array wrapper ------------------------- //
-DenseArrayWrapper::DenseArrayWrapper(const Tree &t, MemoryManager &memory_manager, const DataGraph &dun) : AggregationTableWrapper(t, memory_manager, dun) {
+DenseArrayWrapper::DenseArrayWrapper(const Tree &t, MemoryManager &memory_manager, const DataGraph &dun, bool matchOnly) : AggregationTableWrapper(t, memory_manager, dun, matchOnly) {
     this->d_d_partition_H = static_cast<uint64_t**>(
         memory_manager.allocate(t.getNumNodes() * sizeof(uint64_t*), sizeof(uint64_t*), "d_d_partition_H")
     );
@@ -282,7 +287,7 @@ DenseArrayWrapper::DenseArrayWrapper(const Tree &t, MemoryManager &memory_manage
 
 void DenseArrayWrapper::allocatePartitionHashTable(const Tree& t, MemoryManager &memory_manager,
                                                     uint64_t hashtableSize, std::vector<uint32_t>& nodesInPartition,
-                                                    uint32_t parititionRootNode) {
+                                                    uint32_t parititionRootNode, bool matchOnly) {
     this->partitionHashtableBuckets = hashtableSize / sizeof(uint64_t);                // this item is useless in this class
     this->partitionHashtableSize = this->partitionHashtableBuckets * sizeof(uint64_t);
     for (int nID = 0; nID < t.getNumNodes(); nID++) {
@@ -291,7 +296,9 @@ void DenseArrayWrapper::allocatePartitionHashTable(const Tree& t, MemoryManager 
             continue;
         }
         void* d_partition_H = memory_manager.allocate(hashtableSize, sizeof(uint64_t), "d_partition_H " + std::to_string(nID));
-        gpuProfiledMemset(d_partition_H, 0, hashtableSize, GpuResetKind::InitialZero);
+        if (!matchOnly) {
+            gpuProfiledMemset(d_partition_H, 0, hashtableSize, GpuResetKind::InitialZero);
+        }
         cudaErrorCheck(cudaMemcpy(this->d_d_partition_H + nID, &d_partition_H, sizeof(void*), cudaMemcpyHostToDevice));
         this->h_d_partition_H[nID] = static_cast<uint64_t*>(d_partition_H);
     }

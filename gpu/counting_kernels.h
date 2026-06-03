@@ -64,7 +64,8 @@ __global__ void finalLevelWithLocalCacheKernel(
         bool isRoot,
         uint32_t numTreeNodes,
         uint32_t nID,
-        uint32_t prob_limit
+        uint32_t prob_limit,
+        bool matchOnly
 );
 
 __global__ void finalLevelWithEdgeWithLocalCacheKernel(
@@ -80,7 +81,8 @@ __global__ void finalLevelWithEdgeWithLocalCacheKernel(
         bool isRoot,
         uint32_t numTreeNodes,
         uint32_t nID,
-        uint32_t prob_limit
+        uint32_t prob_limit,
+        bool matchOnly
 );
 
 __global__ void finalLevelKernel(
@@ -96,7 +98,8 @@ __global__ void finalLevelKernel(
         bool isRoot,
         uint32_t numTreeNodes,
         uint32_t nID,
-        uint32_t prob_limit
+        uint32_t prob_limit,
+        bool matchOnly
 );
 
 __global__ void finalLevelWithEdgeKernel(
@@ -112,7 +115,8 @@ __global__ void finalLevelWithEdgeKernel(
         bool isRoot,
         uint32_t numTreeNodes,
         uint32_t nID,
-        uint32_t prob_limit
+        uint32_t prob_limit,
+        bool matchOnly
 );
 
 __global__ void writeToHashTableKernel(

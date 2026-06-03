@@ -1,5 +1,6 @@
 #pragma once
 
+#include <string>
 #include <unordered_set>
 #include <warpcore/counting_hash_table.cuh>
 
@@ -23,7 +24,8 @@ void executeTreeGPU(
         MemoryManager &memory_manager,
         const uint32_t prob_limit,
         float ratio,
-        float execution_memory_pool_size
+        float execution_memory_pool_size,
+        bool matchOnly
 );
 
 void multiJoinTreeGPU(
@@ -33,7 +35,8 @@ void multiJoinTreeGPU(
         MemoryManager &memory_manager,
         const uint32_t prob_limit,
         float ratio,
-        float execution_memory_pool_size
+        float execution_memory_pool_size,
+        bool matchOnly
 );
 
 void copyMetaToGPU(
@@ -47,3 +50,9 @@ void copyMetaToGPU(
 );
 
 void setHashTableOccupancyProfileEnabled(bool enabled);
+
+void startBatchScheduleRecord(const std::string &path);
+
+void startBatchScheduleReplay(const std::string &path);
+
+void finishBatchSchedule();

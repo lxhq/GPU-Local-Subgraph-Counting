@@ -38,13 +38,14 @@ protected:
     uint64_t partitionHashtableSize = 0;            // size in bytes of each partition hashtable
 public:
     virtual void allocatePartitionHashTable(const Tree& t, MemoryManager &memory_manager, uint64_t hashtableSize,
-                                    std::vector<uint32_t>& nodesInPartition, uint32_t parititionRootNode) = 0;
+                                    std::vector<uint32_t>& nodesInPartition, uint32_t parititionRootNode,
+                                    bool matchOnly) = 0;
     virtual void clearPartitionHashTable(uint32_t nID) = 0;
     virtual void releasePartitionHashTable(const Tree &t, MemoryManager &memory_manager) = 0;
     virtual void release(const Tree &t, MemoryManager &memory_manager) = 0;
     virtual void** getPartitionHashTableDevicePointer() = 0;
     virtual void** getPartitionHashTableHostPointer() = 0;
-    AggregationTableWrapper(const Tree &t, MemoryManager &memory_manager, const DataGraph &dun) {
+    AggregationTableWrapper(const Tree &t, MemoryManager &memory_manager, const DataGraph &dun, bool matchOnly) {
         this->d_d_H = static_cast<uint64_t**>(
             memory_manager.allocate(t.getNumNodes() * sizeof(uint64_t*), sizeof(uint64_t*), "d_d_H")
         );
@@ -52,7 +53,9 @@ public:
             uint64_t* d_H = static_cast<uint64_t*>(
                 memory_manager.allocate((dun.getNumEdges() + 1) * sizeof(uint64_t), sizeof(uint64_t), "d_H " + std::to_string(nID))
             );
-            gpuProfiledMemset(d_H, 0, (dun.getNumEdges() + 1) * sizeof(uint64_t), GpuResetKind::InitialZero);
+            if (!matchOnly) {
+                gpuProfiledMemset(d_H, 0, (dun.getNumEdges() + 1) * sizeof(uint64_t), GpuResetKind::InitialZero);
+            }
             cudaErrorCheck(cudaMemcpy(d_d_H + nID, &d_H, sizeof(uint64_t*), cudaMemcpyHostToDevice));
             this->h_d_H.push_back(d_H);
         }
@@ -74,9 +77,10 @@ private:
     warpcore::CountingHashTable<>** d_d_partition_H = nullptr;
     std::vector<std::pair<void*, std::pair<void*, void*>>> partition_H_ptrs;
 public:
-    WarpcoreWrapper(const Tree &t, MemoryManager &memory_manager, const DataGraph &dun);
+    WarpcoreWrapper(const Tree &t, MemoryManager &memory_manager, const DataGraph &dun, bool matchOnly);
     void allocatePartitionHashTable(const Tree& t, MemoryManager &memory_manager, uint64_t hashtableSize,
-                                    std::vector<uint32_t>& nodesInPartition, uint32_t parititionRootNode) override;
+                                    std::vector<uint32_t>& nodesInPartition, uint32_t parititionRootNode,
+                                    bool matchOnly) override;
     void clearPartitionHashTable(uint32_t nID) override;
     void releasePartitionHashTable(const Tree &t, MemoryManager &memory_manager) override;
     void release(const Tree &t, MemoryManager &memory_manager) override;
@@ -89,9 +93,10 @@ private:
     std::vector<uint64_t*> h_d_partition_H;
     uint64_t** d_d_partition_H = nullptr;
 public:
-    LockFreeHashTableWrapper(const Tree &t, MemoryManager &memory_manager, const DataGraph &dun);
+    LockFreeHashTableWrapper(const Tree &t, MemoryManager &memory_manager, const DataGraph &dun, bool matchOnly);
     void allocatePartitionHashTable(const Tree& t, MemoryManager &memory_manager, uint64_t hashtableSize,
-                                    std::vector<uint32_t>& nodesInPartition, uint32_t parititionRootNode) override;
+                                    std::vector<uint32_t>& nodesInPartition, uint32_t parititionRootNode,
+                                    bool matchOnly) override;
     void clearPartitionHashTable(uint32_t nID) override;
     void releasePartitionHashTable(const Tree &t, MemoryManager &memory_manager) override;
     void release(const Tree &t, MemoryManager &memory_manager) override;
@@ -104,9 +109,10 @@ private:
     std::vector<uint64_t*> h_d_partition_H;
     uint64_t** d_d_partition_H = nullptr;
 public:
-    LockBasedHashTableWrapper(const Tree &t, MemoryManager &memory_manager, const DataGraph &dun);
+    LockBasedHashTableWrapper(const Tree &t, MemoryManager &memory_manager, const DataGraph &dun, bool matchOnly);
     void allocatePartitionHashTable(const Tree& t, MemoryManager &memory_manager, uint64_t hashtableSize,
-                                    std::vector<uint32_t>& nodesInPartition, uint32_t parititionRootNode) override;
+                                    std::vector<uint32_t>& nodesInPartition, uint32_t parititionRootNode,
+                                    bool matchOnly) override;
     void clearPartitionHashTable(uint32_t nID) override;
     void releasePartitionHashTable(const Tree &t, MemoryManager &memory_manager) override;
     void release(const Tree &t, MemoryManager &memory_manager) override;
@@ -119,9 +125,10 @@ private:
     std::vector<uint64_t*> h_d_partition_H;
     uint64_t** d_d_partition_H = nullptr;
 public:
-    DenseArrayWrapper(const Tree &t, MemoryManager &memory_manager, const DataGraph &dun);
+    DenseArrayWrapper(const Tree &t, MemoryManager &memory_manager, const DataGraph &dun, bool matchOnly);
     void allocatePartitionHashTable(const Tree& t, MemoryManager &memory_manager, uint64_t hashtableSize,
-                                    std::vector<uint32_t>& nodesInPartition, uint32_t parititionRootNode) override;
+                                    std::vector<uint32_t>& nodesInPartition, uint32_t parititionRootNode,
+                                    bool matchOnly) override;
     void clearPartitionHashTable(uint32_t nID) override;
     void releasePartitionHashTable(const Tree &t, MemoryManager &memory_manager) override;
     void release(const Tree &t, MemoryManager &memory_manager) override;
