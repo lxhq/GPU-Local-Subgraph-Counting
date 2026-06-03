@@ -20,6 +20,8 @@ Command::Command(int argc, char **argv) : CommandParser(argc, argv){
     optionsKey[OptionKeyword::RecordBatchSchedule] = "-record-batch-schedule";
     optionsKey[OptionKeyword::ReplayBatchSchedule] = "-replay-batch-schedule";
     optionsKey[OptionKeyword::MatchOnly] = "-match-only";
+    optionsKey[OptionKeyword::RecordRestartSchedule] = "-record-restart-schedule";
+    optionsKey[OptionKeyword::ReplayRestartSchedule] = "-replay-restart-schedule";
     floatOptionValue[OptionKeyword::HashtableSizeFactor] = 1.0;
     floatOptionValue[OptionKeyword::ExecutionMemoryPool] = 0.0;
     intOptionValue[OptionKeyword::ProbLimit] = 64;
@@ -39,6 +41,8 @@ void Command::processOptions() {
     optionsValue[OptionKeyword::ResultPath] = getCommandOption(optionsKey[OptionKeyword::ResultPath]);
     optionsValue[OptionKeyword::RecordBatchSchedule] = getCommandOption(optionsKey[OptionKeyword::RecordBatchSchedule]);
     optionsValue[OptionKeyword::ReplayBatchSchedule] = getCommandOption(optionsKey[OptionKeyword::ReplayBatchSchedule]);
+    optionsValue[OptionKeyword::RecordRestartSchedule] = getCommandOption(optionsKey[OptionKeyword::RecordRestartSchedule]);
+    optionsValue[OptionKeyword::ReplayRestartSchedule] = getCommandOption(optionsKey[OptionKeyword::ReplayRestartSchedule]);
     if (commandOptionExists(optionsKey[OptionKeyword::HashtableSizeFactor])) {
         floatOptionValue[OptionKeyword::HashtableSizeFactor] = std::stof(getCommandOption(optionsKey[OptionKeyword::HashtableSizeFactor]));
     }

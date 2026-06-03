@@ -37,6 +37,14 @@ BatchScheduleMode gBatchScheduleMode = BatchScheduleMode::Off;
 std::vector<BatchScheduleRecord> gBatchScheduleRecords;
 size_t gBatchScheduleReplayPos = 0;
 std::string gBatchSchedulePath;
+bool gRestartScheduleRecordEnabled = false;
+bool gRestartScheduleReplayEnabled = false;
+std::vector<BatchScheduleRecord> gRestartScheduleRecordRecords;
+std::vector<BatchScheduleRecord> gRestartScheduleReplayRecords;
+size_t gRestartScheduleReplayPos = 0;
+std::vector<BatchScheduleRecord> gRestartScheduleReplayActiveRecords;
+std::string gRestartScheduleRecordPath;
+std::string gRestartScheduleReplayPath;
 
 void bindOccupancyCounters(uint64_t *counters) {
 #if ENABLE_OCCUPANCY_PROFILE
@@ -162,6 +170,141 @@ bool replayBatchScheduleDecision(
     }
     return true;
 }
+
+size_t beginRestartScheduleDecision(
+    BatchScheduleHelper helper,
+    uint32_t nID,
+    uint32_t level,
+    uint32_t nextLevelCount,
+    uint32_t start,
+    uint32_t initialEnd
+) {
+    if (!gRestartScheduleRecordEnabled) {
+        return static_cast<size_t>(-1);
+    }
+    size_t recordPos = gRestartScheduleRecordRecords.size();
+    gRestartScheduleRecordRecords.push_back(BatchScheduleRecord{
+        static_cast<uint32_t>(helper),
+        nID,
+        level,
+        nextLevelCount,
+        start,
+        initialEnd,
+        0
+    });
+    return recordPos;
+}
+
+void completeRestartScheduleDecision(size_t recordPos, uint32_t completedEnd) {
+    if (!gRestartScheduleRecordEnabled || recordPos == static_cast<size_t>(-1)) {
+        return;
+    }
+    if (recordPos >= gRestartScheduleRecordRecords.size()) {
+        throw std::runtime_error("invalid restart schedule record position");
+    }
+    gRestartScheduleRecordRecords[recordPos].end = completedEnd;
+}
+
+void completeRestartScheduleReplayDecision(
+    BatchScheduleHelper helper,
+    uint32_t nID,
+    uint32_t level,
+    uint32_t nextLevelCount,
+    uint32_t completedEnd
+) {
+    if (!gRestartScheduleReplayEnabled) {
+        return;
+    }
+    gRestartScheduleReplayActiveRecords.erase(
+        std::remove_if(
+            gRestartScheduleReplayActiveRecords.begin(),
+            gRestartScheduleReplayActiveRecords.end(),
+            [&](const BatchScheduleRecord &activeRecord) {
+                return activeRecord.helper == static_cast<uint32_t>(helper) &&
+                       activeRecord.nID == nID &&
+                       activeRecord.level == level &&
+                       activeRecord.nextLevelCount == nextLevelCount &&
+                       completedEnd >= activeRecord.end;
+            }),
+        gRestartScheduleReplayActiveRecords.end());
+}
+
+bool replayRestartScheduleDecision(
+    BatchScheduleHelper helper,
+    uint32_t nID,
+    uint32_t level,
+    uint32_t nextLevelCount,
+    uint32_t start,
+    uint32_t &end
+) {
+    if (!gRestartScheduleReplayEnabled) {
+        return false;
+    }
+    for (auto it = gRestartScheduleReplayActiveRecords.begin();
+         it != gRestartScheduleReplayActiveRecords.end();) {
+        BatchScheduleRecord &record = *it;
+        if (record.helper != static_cast<uint32_t>(helper) ||
+            record.nID != nID ||
+            record.level != level ||
+            record.nextLevelCount != nextLevelCount) {
+            ++it;
+            continue;
+        }
+        if (start >= record.end) {
+            it = gRestartScheduleReplayActiveRecords.erase(it);
+            continue;
+        }
+        if (start < record.start) {
+            throw std::runtime_error(
+                "restart schedule replay active range mismatch: active helper=" +
+                std::to_string(record.helper) +
+                ", nID=" + std::to_string(record.nID) +
+                ", level=" + std::to_string(record.level) +
+                ", nextLevelCount=" + std::to_string(record.nextLevelCount) +
+                ", range=[" + std::to_string(record.start) +
+                ", " + std::to_string(record.end) +
+                "); got helper=" + std::to_string(static_cast<uint32_t>(helper)) +
+                ", nID=" + std::to_string(nID) +
+                ", level=" + std::to_string(level) +
+                ", nextLevelCount=" + std::to_string(nextLevelCount) +
+                ", start=" + std::to_string(start)
+            );
+        }
+        end = record.end;
+        return true;
+    }
+    if (gRestartScheduleReplayPos >= gRestartScheduleReplayRecords.size()) {
+        throw std::runtime_error("restart schedule replay exhausted before traversal finished");
+    }
+    const BatchScheduleRecord &record = gRestartScheduleReplayRecords[gRestartScheduleReplayPos++];
+    if (record.end < record.start) {
+        throw std::runtime_error("restart schedule replay contains an invalid completed range");
+    }
+    if (record.helper != static_cast<uint32_t>(helper) ||
+        record.nID != nID ||
+        record.level != level ||
+        record.start != start) {
+        throw std::runtime_error(
+            "restart schedule replay mismatch at record " + std::to_string(gRestartScheduleReplayPos - 1) +
+            ": expected helper=" + std::to_string(record.helper) +
+            ", nID=" + std::to_string(record.nID) +
+            ", level=" + std::to_string(record.level) +
+            ", nextLevelCount=" + std::to_string(record.nextLevelCount) +
+            ", start=" + std::to_string(record.start) +
+            "; got helper=" + std::to_string(static_cast<uint32_t>(helper)) +
+            ", nID=" + std::to_string(nID) +
+            ", level=" + std::to_string(level) +
+            ", nextLevelCount=" + std::to_string(nextLevelCount) +
+            ", start=" + std::to_string(start)
+        );
+    }
+    BatchScheduleRecord activeRecord = record;
+    activeRecord.nextLevelCount = nextLevelCount;
+    activeRecord.end = std::min(record.end, nextLevelCount);
+    end = activeRecord.end;
+    gRestartScheduleReplayActiveRecords.push_back(activeRecord);
+    return true;
+}
 } // namespace
 
 void startBatchScheduleRecord(const std::string &path) {
@@ -222,6 +365,64 @@ void finishBatchSchedule() {
     gBatchScheduleRecords.clear();
     gBatchScheduleReplayPos = 0;
     gBatchSchedulePath.clear();
+}
+
+void startRestartScheduleRecord(const std::string &path) {
+    gRestartScheduleRecordEnabled = true;
+    gRestartScheduleRecordRecords.clear();
+    gRestartScheduleRecordPath = path;
+}
+
+void startRestartScheduleReplay(const std::string &path) {
+    gRestartScheduleReplayEnabled = true;
+    gRestartScheduleReplayRecords.clear();
+    gRestartScheduleReplayPos = 0;
+    gRestartScheduleReplayActiveRecords.clear();
+    gRestartScheduleReplayPath = path;
+
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        throw std::runtime_error("failed to open restart schedule replay file: " + path);
+    }
+    uint64_t count = 0;
+    in.read(reinterpret_cast<char*>(&count), sizeof(count));
+    if (!in) {
+        throw std::runtime_error("failed to read restart schedule replay header: " + path);
+    }
+    gRestartScheduleReplayRecords.resize(count);
+    if (count != 0) {
+        in.read(reinterpret_cast<char*>(gRestartScheduleReplayRecords.data()),
+                static_cast<std::streamsize>(count * sizeof(BatchScheduleRecord)));
+        if (!in) {
+            throw std::runtime_error("failed to read restart schedule replay records: " + path);
+        }
+    }
+}
+
+void finishRestartSchedule() {
+    if (gRestartScheduleRecordEnabled) {
+        std::ofstream out(gRestartScheduleRecordPath, std::ios::binary);
+        if (!out) {
+            throw std::runtime_error("failed to open restart schedule record file: " + gRestartScheduleRecordPath);
+        }
+        uint64_t count = gRestartScheduleRecordRecords.size();
+        out.write(reinterpret_cast<const char*>(&count), sizeof(count));
+        if (count != 0) {
+            out.write(reinterpret_cast<const char*>(gRestartScheduleRecordRecords.data()),
+                      static_cast<std::streamsize>(count * sizeof(BatchScheduleRecord)));
+        }
+        if (!out) {
+            throw std::runtime_error("failed to write restart schedule record file: " + gRestartScheduleRecordPath);
+        }
+    }
+    gRestartScheduleRecordEnabled = false;
+    gRestartScheduleReplayEnabled = false;
+    gRestartScheduleRecordRecords.clear();
+    gRestartScheduleReplayRecords.clear();
+    gRestartScheduleReplayPos = 0;
+    gRestartScheduleReplayActiveRecords.clear();
+    gRestartScheduleRecordPath.clear();
+    gRestartScheduleReplayPath.clear();
 }
 
 void setHashTableOccupancyProfileEnabled(bool enabled) {
@@ -494,7 +695,8 @@ void simpleTreeHelper(
     std::vector<uint32_t>& steps,
     uint32_t batchSize,
     std::vector<bool>& isSafeGuardMode,
-    bool matchOnly
+    bool matchOnly,
+    bool restartRootSeen
 ) {
     if (level == prefix_size) {
         return;
@@ -563,6 +765,17 @@ void simpleTreeHelper(
             recordBatchScheduleDecision(BatchScheduleHelper::SimpleDecision, partitionRootNodeID, level,
                                         next_level_count, start, end);
         }
+        const bool useRestartSchedule = nodesAtStep[level].size() != 0 && !restartRootSeen;
+        bool replayedRestartSchedule = false;
+        size_t restartScheduleRecordPos = static_cast<size_t>(-1);
+        if (useRestartSchedule) {
+            replayedRestartSchedule = replayRestartScheduleDecision(
+                BatchScheduleHelper::SimpleDecision, partitionRootNodeID, level,
+                next_level_count, start, end);
+            restartScheduleRecordPos = beginRestartScheduleDecision(
+                BatchScheduleHelper::SimpleDecision, partitionRootNodeID, level,
+                next_level_count, start, end);
+        }
         uint32_t original_end = end;
         for (uint32_t nID : nodesAtStep[level]) {
             // enumerate the node, pass target[start:end) with reference
@@ -590,17 +803,21 @@ void simpleTreeHelper(
         // pass the target[start:end) to the next level
         simpleTreeHelper(prefix_node, prefix_size, target, next_level_count, memory_manager, dun,
                 d_nodes, h_nodes, level + 1, t, hashtables, prob_limit, target_memory_size, index_len,
-                nodesAtStep, hd_failed_write, partitionRootNodeID, steps, batchSize, isSafeGuardMode, matchOnly);
+                nodesAtStep, hd_failed_write, partitionRootNodeID, steps, batchSize, isSafeGuardMode, matchOnly,
+                restartRootSeen || useRestartSchedule);
         if (!matchOnly && nodesAtStep[level].size() != 0) {
             const uint64_t attemptedBatchSize = original_end >= start ? original_end - start : 0;
             const uint64_t completedBatchSize = end >= start ? end - start : 0;
             bool safeguardTriggered = false;
-            if (original_end != end) {
+            if (original_end != end || replayedRestartSchedule) {
                 steps[level] = end - start;
             } else {
                 steps[level] = growBatchStep(steps[level]);
             }
             update_global_average(end - start);
+            completeRestartScheduleDecision(restartScheduleRecordPos, end);
+            completeRestartScheduleReplayDecision(
+                BatchScheduleHelper::SimpleDecision, partitionRootNodeID, level, next_level_count, end);
             // ------------ safeguard ------------//
             if (isSafeGuardMode[level]) {
                 isSafeGuardMode[level] = false;
@@ -788,7 +1005,8 @@ void executePartitionGPU(
         steps,
         batchSize,
         isSafeGuardMode,
-        matchOnly
+        matchOnly,
+        false
     );
     cudaErrorCheck(cudaFree(hd_failed_write));
     memory_manager.release(d_prefix_node);
@@ -886,7 +1104,8 @@ void complexTreeHelper(
     std::vector<std::vector<uint32_t>> &steps,
     uint32_t batchSize,
     std::vector<std::vector<bool>> &isSafeGuardMode,
-    bool matchOnly) {
+    bool matchOnly,
+    bool restartRootSeen) {
     if (level == t.getNode(nID).numVertices && source_count != 0) {
         if (matchOnly) {
             return;
@@ -960,6 +1179,17 @@ void complexTreeHelper(
             recordBatchScheduleDecision(BatchScheduleHelper::ComplexDecision, nID, level,
                                         next_level_count, start, end);
         }
+        const bool useRestartSchedule = t.getNodesAtStep()[nID][level].size() != 0 && !restartRootSeen;
+        bool replayedRestartSchedule = false;
+        size_t restartScheduleRecordPos = static_cast<size_t>(-1);
+        if (useRestartSchedule) {
+            replayedRestartSchedule = replayRestartScheduleDecision(
+                BatchScheduleHelper::ComplexDecision, nID, level,
+                next_level_count, start, end);
+            restartScheduleRecordPos = beginRestartScheduleDecision(
+                BatchScheduleHelper::ComplexDecision, nID, level,
+                next_level_count, start, end);
+        }
         uint32_t original_end = end;
         for (uint32_t cID : t.getNodesAtStep()[nID][level]) {
             // enumerate the node, pass target[start:end) with reference
@@ -983,7 +1213,7 @@ void complexTreeHelper(
             complexTreeHelper(cID, copied_target, end - start, memory_manager, dun, d_nodes, h_nodes,
                             h_nodes[cID].prefixPosCount, t, hashtables, prob_limit, target_memory_size,
                         index_len, hd_failed_write, partitionRootNodeID, steps, batchSize, isSafeGuardMode,
-                        matchOnly);
+                        matchOnly, false);
             // release copy prefix
             memory_manager.release(copied_target);
             if (!matchOnly && cID != partitionRootNodeID) {
@@ -1005,7 +1235,7 @@ void complexTreeHelper(
         complexTreeHelper(nID, target + start * (index_len + level + 1), end - start, memory_manager, dun,
                         d_nodes, h_nodes, level + 1, t, hashtables, prob_limit, target_memory_size, 
                         index_len, hd_failed_write, partitionRootNodeID, steps, batchSize, isSafeGuardMode,
-                        matchOnly);
+                        matchOnly, restartRootSeen || useRestartSchedule);
         bool shouldBreak = !matchOnly && *hd_failed_write != UINT64_MAX;
         if (!replayBatchScheduleDecision(BatchScheduleHelper::ComplexSelfBreak, nID, level,
                                          next_level_count, start, end, &shouldBreak)) {
@@ -1016,12 +1246,15 @@ void complexTreeHelper(
             const uint64_t attemptedBatchSize = original_end >= start ? original_end - start : 0;
             const uint64_t completedBatchSize = end >= start ? end - start : 0;
             bool safeguardTriggered = false;
-            if (original_end != end) {
+            if (original_end != end || replayedRestartSchedule) {
                 steps[nID][level] = end - start;
             } else {
                 steps[nID][level] = growBatchStep(steps[nID][level]);
             }
             update_global_average(end - start);
+            completeRestartScheduleDecision(restartScheduleRecordPos, end);
+            completeRestartScheduleReplayDecision(
+                BatchScheduleHelper::ComplexDecision, nID, level, next_level_count, end);
             // ------------ safeguard ------------//
             if (isSafeGuardMode[nID][level]) {
                 isSafeGuardMode[nID][level] = false;
@@ -1160,7 +1393,7 @@ void multiJoinTreeGPU(
             std::vector<std::vector<bool>> isSafeGuardMode(t.getNumNodes(), std::vector<bool>(MAX_PATTERN_SIZE, false));
             complexTreeHelper(rootNodeID, nullptr, dun.getNumVertices(), memory_manager, dun, d_nodes, h_nodes,
                             0, t, hashtables, prob_limit, target_memory_size, index_len, hd_failed_write, rootNodeID,
-                            steps, batchSize, isSafeGuardMode, matchOnly);
+                            steps, batchSize, isSafeGuardMode, matchOnly, false);
             
             /********* copy the hash table to the host memory *********/
             if (!matchOnly) {

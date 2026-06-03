@@ -56,3 +56,9 @@ void startBatchScheduleRecord(const std::string &path);
 void startBatchScheduleReplay(const std::string &path);
 
 void finishBatchSchedule();
+
+void startRestartScheduleRecord(const std::string &path);
+
+void startRestartScheduleReplay(const std::string &path);
+
+void finishRestartSchedule();

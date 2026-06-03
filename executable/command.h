@@ -24,7 +24,9 @@ enum OptionKeyword {
     OccupancyProfile = 12,    // -occupancy-profile, profile hash-table occupancy
     RecordBatchSchedule = 13, // -record-batch-schedule, write adaptive GPU batch schedule
     ReplayBatchSchedule = 14, // -replay-batch-schedule, replay adaptive GPU batch schedule
-    MatchOnly = 15            // -match-only, run without table reset and join aggregation
+    MatchOnly = 15,           // -match-only, run without table reset and join aggregation
+    RecordRestartSchedule = 16, // -record-restart-schedule, write completed restart-safe batch ranges
+    ReplayRestartSchedule = 17  // -replay-restart-schedule, replay completed restart-safe batch ranges
 };
 
 class Command : public CommandParser {
@@ -99,6 +101,14 @@ public:
 
     bool getMatchOnly() {
         return booleanOptionValue[OptionKeyword::MatchOnly];
+    }
+
+    std::string getRecordRestartSchedulePath() {
+        return optionsValue[OptionKeyword::RecordRestartSchedule];
+    }
+
+    std::string getReplayRestartSchedulePath() {
+        return optionsValue[OptionKeyword::ReplayRestartSchedule];
     }
 };
 

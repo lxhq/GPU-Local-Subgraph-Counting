@@ -276,6 +276,46 @@ JA    = Total - SM - Reset
 
 For quick local checks, the profiled normal-record run can also provide an approximate total runtime, but the reported figures use the clean normal runtime when available.
 
+### Restart-Cost Profiling
+
+The restart-cost experiment records the completed prefix ranges from an adaptive run, then replays those completed ranges to avoid restart rediscovery.
+
+| Option | Description |
+| --- | --- |
+| `-record-restart-schedule <path>` | Write the completed restart-safe batch ranges to a binary file or directory. In batch-query mode, one `.schedule.bin` file is written per query. |
+| `-replay-restart-schedule <path>` | Replay previously recorded restart-safe batch ranges. |
+
+Restart frequency is reported directly in the normal stdout. A restart is counted when a planned prefix batch is truncated by a hash-table insertion failure. The printed fields include the number of restart profile batch iterations, restart count, attempted prefixes, completed prefixes, truncated prefixes, truncated fraction, and safeguard count.
+
+For restart cost, first run the normal adaptive execution while recording the completed restart-safe ranges:
+
+```shell
+./build/executable/scope.out \
+  -q ./exp/pattern_graph/6voc/103.txt \
+  -d ./exp/data_graph/web-spam.txt \
+  -r ./result/web-spam/6voc_103.txt \
+  -record-restart-schedule ./result/web-spam/6voc_103_restart.schedule.bin
+```
+
+Then replay the recorded ranges:
+
+```shell
+./build/executable/scope.out \
+  -q ./exp/pattern_graph/6voc/103.txt \
+  -d ./exp/data_graph/web-spam.txt \
+  -r ./result/web-spam/6voc_103_replay.txt \
+  -replay-restart-schedule ./result/web-spam/6voc_103_restart.schedule.bin
+```
+
+The restart discovery cost is computed as:
+
+```text
+Restart cost = adaptive-record runtime - zero-restart replay runtime
+Cost fraction = Restart cost / adaptive-record runtime
+```
+
+If a replay run still reports nonzero restarts, record a refined schedule by using `-replay-restart-schedule` and `-record-restart-schedule` together with different paths, then replay the refined schedule.
+
 ## Comparison
 
 In the paper, we report the speedup over the original CPU SCOPE implementation. Our goal is to process queries **without any pre-built index**. We found that the original [SCOPE](https://github.com/magic62442/subgraph-counting) code may encounter runtime errors when running without a pre-built triangle index (```-t``` option).

@@ -87,11 +87,20 @@ int main(int argc, char **argv) {
     bool matchOnly = cmd.getMatchOnly();
     std::string recordBatchSchedulePath = cmd.getRecordBatchSchedulePath();
     std::string replayBatchSchedulePath = cmd.getReplayBatchSchedulePath();
+    std::string recordRestartSchedulePath = cmd.getRecordRestartSchedulePath();
+    std::string replayRestartSchedulePath = cmd.getReplayRestartSchedulePath();
     if (!recordBatchSchedulePath.empty() && !replayBatchSchedulePath.empty()) {
         throw std::runtime_error("use only one of -record-batch-schedule or -replay-batch-schedule");
     }
+    if (!recordRestartSchedulePath.empty() && !replayRestartSchedulePath.empty() &&
+        recordRestartSchedulePath == replayRestartSchedulePath) {
+        throw std::runtime_error("restart schedule record and replay paths must be different");
+    }
     if (matchOnly && replayBatchSchedulePath.empty()) {
         throw std::runtime_error("-match-only requires -replay-batch-schedule");
+    }
+    if (matchOnly && (!recordRestartSchedulePath.empty() || !replayRestartSchedulePath.empty())) {
+        throw std::runtime_error("restart schedules should be used with normal execution, not -match-only");
     }
     if (matchOnly && shareNode) {
         throw std::runtime_error("-match-only is currently supported for non-share GPU execution only");
@@ -123,6 +132,8 @@ int main(int argc, char **argv) {
     std::cout << "occupancy profile: " << occupancyProfile << std::endl;
     std::cout << "record batch schedule path: " << recordBatchSchedulePath << std::endl;
     std::cout << "replay batch schedule path: " << replayBatchSchedulePath << std::endl;
+    std::cout << "record restart schedule path: " << recordRestartSchedulePath << std::endl;
+    std::cout << "replay restart schedule path: " << replayRestartSchedulePath << std::endl;
     std::cout << "subgraph matching hashtable ratio: " << ratio << std::endl;
     std::cout << "prob limit: " << prob_limit << std::endl;
     std::cout << "hash table type: " << HASH_TABLE_TYPE << std::endl;
@@ -326,10 +337,22 @@ int main(int argc, char **argv) {
             std::string queryReplayBatchSchedulePath = schedulePathForQuery(
                 replayBatchSchedulePath, batchQuery, queryGraphPath, batchQuery ? files[i] : ""
             );
+            std::string queryRecordRestartSchedulePath = schedulePathForQuery(
+                recordRestartSchedulePath, batchQuery, queryGraphPath, batchQuery ? files[i] : ""
+            );
+            std::string queryReplayRestartSchedulePath = schedulePathForQuery(
+                replayRestartSchedulePath, batchQuery, queryGraphPath, batchQuery ? files[i] : ""
+            );
             if (!queryRecordBatchSchedulePath.empty()) {
                 startBatchScheduleRecord(queryRecordBatchSchedulePath);
             } else if (!queryReplayBatchSchedulePath.empty()) {
                 startBatchScheduleReplay(queryReplayBatchSchedulePath);
+            }
+            if (!queryReplayRestartSchedulePath.empty()) {
+                startRestartScheduleReplay(queryReplayRestartSchedulePath);
+            }
+            if (!queryRecordRestartSchedulePath.empty()) {
+                startRestartScheduleRecord(queryRecordRestartSchedulePath);
             }
             start = std::chrono::steady_clock::now();
             // Count* H. The LSC result is stored in H
@@ -508,6 +531,7 @@ int main(int argc, char **argv) {
             elapsedSeconds = end - start;
             exeTime = elapsedSeconds.count();
             finishBatchSchedule();
+            finishRestartSchedule();
             if (batchQuery)
                 std::cout << "file: " << files[i] << ", ";
             if (matchOnly) std::cout << "match-only execution time: " << exeTime << "s";
