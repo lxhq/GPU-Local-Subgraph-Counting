@@ -18,7 +18,8 @@ enum OptionKeyword {
     ShareNode = 6,           // -share, enable sharing nodes or not
     HashtableSizeFactor = 7, // -ratio, the factor of hash table size
     ProbLimit = 8,           // -prob, the limit of probability
-    MemoryPool=9             // -mem, the size of memory pool in GB
+    MemoryPool = 9,          // -mem, the size of memory pool in GB
+    AggregationMemoryPool = 10 // -agg-mem, aggregation memory budget in GB
 };
 
 class Command : public CommandParser {
@@ -69,6 +70,10 @@ public:
 
     uint32_t getMemoryPoolSize() {
         return intOptionValue[OptionKeyword::MemoryPool];
+    }
+
+    float getAggregationMemoryPoolSize() {
+        return floatOptionValue[OptionKeyword::AggregationMemoryPool];
     }
 };
 

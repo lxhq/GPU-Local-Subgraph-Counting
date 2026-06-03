@@ -11,6 +11,16 @@ inline uint32_t growBatchStep(uint32_t step) {
     return grown;
 }
 
+inline uint64_t capAggregationMemory(uint64_t availableMemory, float aggregationMemoryPoolSize) {
+    if (aggregationMemoryPoolSize <= 0.0f) {
+        return availableMemory;
+    }
+    uint64_t aggregationMemoryLimit = static_cast<uint64_t>(
+        static_cast<double>(aggregationMemoryPoolSize) * 1024.0 * 1024.0 * 1024.0
+    );
+    return std::min(availableMemory, aggregationMemoryLimit);
+}
+
 void copyMetaToGPU (
         const DataGraph &din,
         const DataGraph &dout,
@@ -318,6 +328,9 @@ void simpleTreeHelper(
                 d_nodes, h_nodes, level + 1, t, hashtables, prob_limit, target_memory_size, index_len,
                 nodesAtStep, hd_failed_write, partitionRootNodeID, steps, batchSize, isSafeGuardMode);
         if (nodesAtStep[level].size() != 0) {
+            const uint64_t attemptedBatchSize = original_end >= start ? original_end - start : 0;
+            const uint64_t completedBatchSize = end >= start ? end - start : 0;
+            bool safeguardTriggered = false;
             if (original_end != end) {
                 steps[level] = end - start;
             } else {
@@ -340,6 +353,7 @@ void simpleTreeHelper(
                 std::cout << "safeguard is triggered, the performance may be degraded! Please consider increasing the hash table size" << std::endl;
                 isSafeGuardMode[level] = true;
                 steps[level] = 1;
+                safeguardTriggered = true;
                 // disable all children nodes' device partition
                 for (uint32_t nID : nodesAtStep[level]) {
                     cudaErrorCheck(
@@ -356,6 +370,7 @@ void simpleTreeHelper(
                 }
             }
             // ------------ safeguard ------------//
+            record_restart_profile_batch(attemptedBatchSize, completedBatchSize, safeguardTriggered);
         }
     }
 }
@@ -369,7 +384,8 @@ void executePartitionGPU(
         const uint32_t prob_limit,
         float ratio,
         MemoryManager &memory_manager,
-        const Graph &dun
+        const Graph &dun,
+        float aggregationMemoryPoolSize
 ) {
     const std::vector<std::vector<VertexID>> &globalOrder = t.getGlobalOrder();
     const std::vector<VertexID> &partitionOrder = globalOrder[pID];
@@ -435,7 +451,7 @@ void executePartitionGPU(
         return;
     }
     uint32_t numHashTable = endPos - startPos - 1;
-    uint64_t availableMemory = memory_manager.getAvailableMemory();
+    uint64_t availableMemory = capAggregationMemory(memory_manager.getAvailableMemory(), aggregationMemoryPoolSize);
     uint64_t hashTableSizeMemoryLimit = 0, subgraphEnumerationMemoryLimit = 0, batchSize = 0;
     bool isEdgeTable = false;
     // hashTableSizeMemoryLimit * numHashTable + subgraphEnumerationMemoryLimit <= availableMemory
@@ -518,7 +534,8 @@ void  executeTreeGPU (
         HashTable *H,
         MemoryManager &memory_manager,
         const uint32_t prob_limit,
-        float ratio
+        float ratio,
+        float aggregationMemoryPoolSize
 ) {
 
     /*************************** create the hashtable in the device memory **************************/
@@ -544,7 +561,8 @@ void  executeTreeGPU (
 
     /*************************** start compute each partitions **************************/
     for (VertexID pID = 0; pID < t.getPartitionPos().size(); ++pID) {
-        executePartitionGPU(pID, t, hashtables, d_nodes, h_nodes, prob_limit, ratio, memory_manager, dun);
+        executePartitionGPU(pID, t, hashtables, d_nodes, h_nodes, prob_limit, ratio, memory_manager, dun,
+                            aggregationMemoryPoolSize);
     }
 
     /********* copy the hash table to the host memory *********/
@@ -695,6 +713,9 @@ void complexTreeHelper(
                         d_nodes, h_nodes, level + 1, t, hashtables, prob_limit, target_memory_size, 
                         index_len, hd_failed_write, partitionRootNodeID, steps, batchSize, isSafeGuardMode);
         if (t.getNodesAtStep()[nID][level].size() != 0) {
+            const uint64_t attemptedBatchSize = original_end >= start ? original_end - start : 0;
+            const uint64_t completedBatchSize = end >= start ? end - start : 0;
+            bool safeguardTriggered = false;
             if (original_end != end) {
                 steps[nID][level] = end - start;
             } else {
@@ -717,6 +738,7 @@ void complexTreeHelper(
                 std::cout << "safeguard is triggered, the performance may be degraded! Please consider increasing the hash table size" << std::endl;
                 isSafeGuardMode[nID][level] = true;
                 steps[nID][level] = 1;
+                safeguardTriggered = true;
                 // disable all children nodes' device partition
                 for (uint32_t cID : t.getNodesAtStep()[nID][level]) {
                     cudaErrorCheck(
@@ -733,6 +755,7 @@ void complexTreeHelper(
                 }
             }
             // ------------ safeguard ------------//
+            record_restart_profile_batch(attemptedBatchSize, completedBatchSize, safeguardTriggered);
         }
         if (*hd_failed_write != UINT64_MAX) {
             break;
@@ -746,7 +769,8 @@ void multiJoinTreeGPU(
         HashTable *H,
         MemoryManager &memory_manager,
         uint32_t prob_limit,
-        float ratio) {
+        float ratio,
+        float aggregationMemoryPoolSize) {
 #if HASH_TABLE_TYPE == 0
     WarpcoreWrapper hashtables(t, memory_manager, dun);
 #elif HASH_TABLE_TYPE == 1
@@ -788,7 +812,7 @@ void multiJoinTreeGPU(
 
             /********* allocate memory for each node (subgraphenumeration, hashtable) *****************/
             uint32_t numHashTable = partition.size() - 1;
-            uint64_t availableMemory = memory_manager.getAvailableMemory();
+            uint64_t availableMemory = capAggregationMemory(memory_manager.getAvailableMemory(), aggregationMemoryPoolSize);
             uint64_t hashTableSizeMemoryLimit = 0, subgraphEnumerationMemoryLimit = 0, batchSize = 0;
             bool isEdgeTable = false;
             // hashTableSizeMemoryLimit * numHashTable + subgraphEnumerationMemoryLimit <= availableMemory

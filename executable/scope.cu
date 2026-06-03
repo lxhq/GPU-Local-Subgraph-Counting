@@ -46,6 +46,7 @@ int main(int argc, char **argv) {
     float ratio = cmd.getRatio();
     uint32_t prob_limit = cmd.getProbLimit();
     uint32_t memory_pool_size = cmd.getMemoryPoolSize();
+    float aggregation_memory_pool_size = cmd.getAggregationMemoryPoolSize();
     std::cout << "query graph path: " << queryGraphPath << std::endl;
     std::cout << "data graph path: " << dataGraphPath << std::endl;
     std::cout << "result path: " << resultPath << std::endl;
@@ -54,6 +55,7 @@ int main(int argc, char **argv) {
     std::cout << "using triangle: " << useTriangle << std::endl;
     std::cout << "set intersection type: " << SI << std::endl;
     std::cout << "max memory pool size: " << memory_pool_size << " GB" << std::endl;
+    std::cout << "aggregation memory budget: " << aggregation_memory_pool_size << " GB" << std::endl;
     std::cout << "subgraph matching hashtable ratio: " << ratio << std::endl;
     std::cout << "prob limit: " << prob_limit << std::endl;
     std::cout << "hash table type: " << HASH_TABLE_TYPE << std::endl;
@@ -134,6 +136,7 @@ int main(int argc, char **argv) {
     ui totalNumPatterns = 0, totalNodes = 0;
     double averageNodeSize = 0.0;
     int numVertexTable = 0, numEdgeTable = 0;
+    reset_global_restart_profile_stats();
 
     /************************** Initlize GPU  ******************************/
     /****************** print device information *************/
@@ -241,6 +244,7 @@ int main(int argc, char **argv) {
             end = std::chrono::steady_clock::now();
             elapsedSeconds = end - start;
             totalPlanTime += elapsedSeconds.count();
+            reset_restart_profile_stats();
             start = std::chrono::steady_clock::now();
             // Count* H. The LSC result is stored in H
             HashTable H;
@@ -343,7 +347,8 @@ int main(int argc, char **argv) {
                                     //             ht, outID, unID, reverseID, startOffset[0], patternV[0], dataV[0],
                                     //             visited[0], candPos, tmp, allV);
                                     // auto start = std::chrono::steady_clock::now();
-                                    executeTreeGPU(t, dun, ht, memory_manager, prob_limit, ratio);
+                                    executeTreeGPU(t, dun, ht, memory_manager, prob_limit, ratio,
+                                                   aggregation_memory_pool_size);
                                     // auto end = std::chrono::steady_clock::now();
                                     // std::chrono::duration<double> elapsedSeconds = end - start;
                                     // std::cout << "execution time: " << elapsedSeconds.count() << "s" << std::endl << std::endl;
@@ -351,7 +356,8 @@ int main(int argc, char **argv) {
                                 else {
                                     // multiJoinTree(t, din, dout, dun, useTriangle, triangle, patterns[divideFactor][j],
                                     //             ht, outID, unID, reverseID, startOffset, patternV, dataV, visited, tmp, allV);
-                                    multiJoinTreeGPU(t, dun, ht, memory_manager, prob_limit, ratio);
+                                    multiJoinTreeGPU(t, dun, ht, memory_manager, prob_limit, ratio,
+                                                     aggregation_memory_pool_size);
                                 }
                             }
                             // ht is the cout for each node. here h is the count for the root node
@@ -422,6 +428,15 @@ int main(int argc, char **argv) {
             for (auto it = patterns.begin(); it != patterns.end(); ++it)
                 numPatterns += it->second.size();
             std::cout << ", number of patterns: " << numPatterns;
+            RestartProfileStats restartStats = get_restart_profile_stats();
+            std::cout << ", restart profile batch iterations: " << restartStats.batchIterations;
+            std::cout << ", restart count: " << restartStats.restartCount;
+            std::cout << ", restart rate: " << get_restart_profile_rate(restartStats);
+            std::cout << ", restart attempted prefixes: " << restartStats.attemptedPrefixes;
+            std::cout << ", restart completed prefixes: " << restartStats.completedPrefixes;
+            std::cout << ", restart truncated prefixes: " << restartStats.truncatedPrefixes;
+            std::cout << ", restart truncated fraction: " << get_restart_profile_truncated_fraction(restartStats);
+            std::cout << ", restart safeguard count: " << restartStats.safeguardCount;
             std::cout << ", current average batch size: " << global_running_avg << std::endl;
             totalExeTime += exeTime;
             totalNumPatterns += numPatterns;
@@ -442,6 +457,15 @@ int main(int argc, char **argv) {
                   << ", number of edge hash tables (except for root node): " << numEdgeTable << std::endl;
         std::cout << "number of match: " << gNumMatch << ", number of intersect: " << gNumIntersect << std::endl;
         std::cout << "total average batch size: " << global_running_avg << std::endl;
+        RestartProfileStats totalRestartStats = get_global_restart_profile_stats();
+        std::cout << "total restart profile batch iterations: " << totalRestartStats.batchIterations << std::endl;
+        std::cout << "total restart count: " << totalRestartStats.restartCount << std::endl;
+        std::cout << "total restart rate: " << get_restart_profile_rate(totalRestartStats) << std::endl;
+        std::cout << "total restart attempted prefixes: " << totalRestartStats.attemptedPrefixes << std::endl;
+        std::cout << "total restart completed prefixes: " << totalRestartStats.completedPrefixes << std::endl;
+        std::cout << "total restart truncated prefixes: " << totalRestartStats.truncatedPrefixes << std::endl;
+        std::cout << "total restart truncated fraction: " << get_restart_profile_truncated_fraction(totalRestartStats) << std::endl;
+        std::cout << "total restart safeguard count: " << totalRestartStats.safeguardCount << std::endl;
     }
 
     if (shareNode) {

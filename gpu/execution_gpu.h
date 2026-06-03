@@ -22,7 +22,8 @@ void executeTreeGPU(
         HashTable *H,
         MemoryManager &memory_manager,
         const uint32_t prob_limit,
-        float ratio
+        float ratio,
+        float aggregation_memory_pool_size
 );
 
 void multiJoinTreeGPU(
@@ -31,7 +32,8 @@ void multiJoinTreeGPU(
         HashTable *H,
         MemoryManager &memory_manager,
         const uint32_t prob_limit,
-        float ratio
+        float ratio,
+        float aggregation_memory_pool_size
 );
 
 void copyMetaToGPU(
