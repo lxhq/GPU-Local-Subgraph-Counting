@@ -41,7 +41,7 @@ SubgraphMatching::SubgraphMatching(MemoryManager& memory_manager, uint32_t *sour
         exclusive_sum_ = static_cast<uint64_t*>(memory_manager_.allocate(
             (source_embedding_count_ + 1) * sizeof(uint64_t), sizeof(uint64_t), "exclusive sum"));
         uint32_t* matching_counts = static_cast<uint32_t*>(memory_manager_.allocate(
-            source_embedding_count_ * sizeof(uint32_t), sizeof(uint32_t), "matching counts"));
+            (source_embedding_count_ + 1) * sizeof(uint32_t), sizeof(uint32_t), "matching counts"));
         countKernel<<<SDIV(source_embedding_count_, WARP_PER_BLOCK), BLOCK_DIM>>>(
             index_len_,
             level,
