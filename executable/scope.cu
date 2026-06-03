@@ -46,7 +46,7 @@ int main(int argc, char **argv) {
     float ratio = cmd.getRatio();
     uint32_t prob_limit = cmd.getProbLimit();
     uint32_t memory_pool_size = cmd.getMemoryPoolSize();
-    float aggregation_memory_pool_size = cmd.getAggregationMemoryPoolSize();
+    float execution_memory_pool_size = cmd.getExecutionMemoryPoolSize();
     std::cout << "query graph path: " << queryGraphPath << std::endl;
     std::cout << "data graph path: " << dataGraphPath << std::endl;
     std::cout << "result path: " << resultPath << std::endl;
@@ -55,7 +55,7 @@ int main(int argc, char **argv) {
     std::cout << "using triangle: " << useTriangle << std::endl;
     std::cout << "set intersection type: " << SI << std::endl;
     std::cout << "max memory pool size: " << memory_pool_size << " GB" << std::endl;
-    std::cout << "aggregation memory budget: " << aggregation_memory_pool_size << " GB" << std::endl;
+    std::cout << "execution memory budget: " << execution_memory_pool_size << " GB" << std::endl;
     std::cout << "subgraph matching hashtable ratio: " << ratio << std::endl;
     std::cout << "prob limit: " << prob_limit << std::endl;
     std::cout << "hash table type: " << HASH_TABLE_TYPE << std::endl;
@@ -136,6 +136,7 @@ int main(int argc, char **argv) {
     ui totalNumPatterns = 0, totalNodes = 0;
     double averageNodeSize = 0.0;
     int numVertexTable = 0, numEdgeTable = 0;
+    reset_global_aggregation_hash_table_stats();
     reset_global_restart_profile_stats();
 
     /************************** Initlize GPU  ******************************/
@@ -244,6 +245,7 @@ int main(int argc, char **argv) {
             end = std::chrono::steady_clock::now();
             elapsedSeconds = end - start;
             totalPlanTime += elapsedSeconds.count();
+            reset_aggregation_hash_table_stats();
             reset_restart_profile_stats();
             start = std::chrono::steady_clock::now();
             // Count* H. The LSC result is stored in H
@@ -348,7 +350,7 @@ int main(int argc, char **argv) {
                                     //             visited[0], candPos, tmp, allV);
                                     // auto start = std::chrono::steady_clock::now();
                                     executeTreeGPU(t, dun, ht, memory_manager, prob_limit, ratio,
-                                                   aggregation_memory_pool_size);
+                                                   execution_memory_pool_size);
                                     // auto end = std::chrono::steady_clock::now();
                                     // std::chrono::duration<double> elapsedSeconds = end - start;
                                     // std::cout << "execution time: " << elapsedSeconds.count() << "s" << std::endl << std::endl;
@@ -357,7 +359,7 @@ int main(int argc, char **argv) {
                                     // multiJoinTree(t, din, dout, dun, useTriangle, triangle, patterns[divideFactor][j],
                                     //             ht, outID, unID, reverseID, startOffset, patternV, dataV, visited, tmp, allV);
                                     multiJoinTreeGPU(t, dun, ht, memory_manager, prob_limit, ratio,
-                                                     aggregation_memory_pool_size);
+                                                     execution_memory_pool_size);
                                 }
                             }
                             // ht is the cout for each node. here h is the count for the root node
@@ -428,6 +430,10 @@ int main(int argc, char **argv) {
             for (auto it = patterns.begin(); it != patterns.end(); ++it)
                 numPatterns += it->second.size();
             std::cout << ", number of patterns: " << numPatterns;
+            std::cout << ", aggregation hash table allocations: " << aggregation_hash_table_allocations;
+            std::cout << ", aggregation total hash table bytes: " << aggregation_hash_table_total_bytes;
+            std::cout << ", aggregation average hash table bytes: " << get_aggregation_average_hash_table_size_bytes();
+            std::cout << ", aggregation average hash table GB: " << get_aggregation_average_hash_table_size_bytes() / (1024.0 * 1024.0 * 1024.0);
             RestartProfileStats restartStats = get_restart_profile_stats();
             std::cout << ", restart profile batch iterations: " << restartStats.batchIterations;
             std::cout << ", restart count: " << restartStats.restartCount;
@@ -457,6 +463,8 @@ int main(int argc, char **argv) {
                   << ", number of edge hash tables (except for root node): " << numEdgeTable << std::endl;
         std::cout << "number of match: " << gNumMatch << ", number of intersect: " << gNumIntersect << std::endl;
         std::cout << "total average batch size: " << global_running_avg << std::endl;
+        std::cout << "total average hash table bytes: " << get_global_average_hash_table_size_bytes() << std::endl;
+        std::cout << "total average hash table GB: " << get_global_average_hash_table_size_bytes() / (1024.0 * 1024.0 * 1024.0) << std::endl;
         RestartProfileStats totalRestartStats = get_global_restart_profile_stats();
         std::cout << "total restart profile batch iterations: " << totalRestartStats.batchIterations << std::endl;
         std::cout << "total restart count: " << totalRestartStats.restartCount << std::endl;

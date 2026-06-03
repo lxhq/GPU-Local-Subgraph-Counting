@@ -14,9 +14,9 @@ Command::Command(int argc, char **argv) : CommandParser(argc, argv){
     optionsKey[OptionKeyword::HashtableSizeFactor] = "-ratio";
     optionsKey[OptionKeyword::ProbLimit] = "-prob";
     optionsKey[OptionKeyword::MemoryPool] = "-mem";
-    optionsKey[OptionKeyword::AggregationMemoryPool] = "-agg-mem";
+    optionsKey[OptionKeyword::ExecutionMemoryPool] = "-exec-mem";
     floatOptionValue[OptionKeyword::HashtableSizeFactor] = 1.0;
-    floatOptionValue[OptionKeyword::AggregationMemoryPool] = 0.0;
+    floatOptionValue[OptionKeyword::ExecutionMemoryPool] = 0.0;
     intOptionValue[OptionKeyword::ProbLimit] = 64;
     intOptionValue[OptionKeyword::MemoryPool] = 0;
     booleanOptionValue[OptionKeyword::BatchQuery] = false;
@@ -38,8 +38,8 @@ void Command::processOptions() {
     if (commandOptionExists(optionsKey[OptionKeyword::MemoryPool])) {
         intOptionValue[OptionKeyword::MemoryPool] = std::stoi(getCommandOption(optionsKey[OptionKeyword::MemoryPool]));
     }
-    if (commandOptionExists(optionsKey[OptionKeyword::AggregationMemoryPool])) {
-        floatOptionValue[OptionKeyword::AggregationMemoryPool] = std::stof(getCommandOption(optionsKey[OptionKeyword::AggregationMemoryPool]));
+    if (commandOptionExists(optionsKey[OptionKeyword::ExecutionMemoryPool])) {
+        floatOptionValue[OptionKeyword::ExecutionMemoryPool] = std::stof(getCommandOption(optionsKey[OptionKeyword::ExecutionMemoryPool]));
     }
     booleanOptionValue[OptionKeyword::BatchQuery] = commandOptionExists(optionsKey[OptionKeyword::BatchQuery]);
     booleanOptionValue[OptionKeyword::ShareNode] = commandOptionExists(optionsKey[OptionKeyword::ShareNode]);

@@ -201,6 +201,7 @@ The following arguments are available for fine-tuning performance.
 | --- | --- |
 | `-prob` | The probing budget for the open-addressing hash table. **Default: 64**. |
 | `-mem` | Total device memory budget (in GB). **Default: 90% of available memory**. |
+| `-exec-mem` | Execution workspace memory budget (in GB). This limits the memory used inside each tree execution, including subgraph-enumeration buffers and aggregation tables. **Default: 0**, meaning no separate execution cap beyond `-mem`. |
 | `-ratio` | Ratio between memory for Subgraph Enumeration (SE) and Hash Table (HT). **Default: 1**. |
 
 ## Comparison

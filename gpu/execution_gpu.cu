@@ -11,14 +11,14 @@ inline uint32_t growBatchStep(uint32_t step) {
     return grown;
 }
 
-inline uint64_t capAggregationMemory(uint64_t availableMemory, float aggregationMemoryPoolSize) {
-    if (aggregationMemoryPoolSize <= 0.0f) {
+inline uint64_t capExecutionMemory(uint64_t availableMemory, float executionMemoryPoolSize) {
+    if (executionMemoryPoolSize <= 0.0f) {
         return availableMemory;
     }
-    uint64_t aggregationMemoryLimit = static_cast<uint64_t>(
-        static_cast<double>(aggregationMemoryPoolSize) * 1024.0 * 1024.0 * 1024.0
+    uint64_t executionMemoryLimit = static_cast<uint64_t>(
+        static_cast<double>(executionMemoryPoolSize) * 1024.0 * 1024.0 * 1024.0
     );
-    return std::min(availableMemory, aggregationMemoryLimit);
+    return std::min(availableMemory, executionMemoryLimit);
 }
 
 void copyMetaToGPU (
@@ -385,7 +385,7 @@ void executePartitionGPU(
         float ratio,
         MemoryManager &memory_manager,
         const Graph &dun,
-        float aggregationMemoryPoolSize
+        float executionMemoryPoolSize
 ) {
     const std::vector<std::vector<VertexID>> &globalOrder = t.getGlobalOrder();
     const std::vector<VertexID> &partitionOrder = globalOrder[pID];
@@ -451,7 +451,7 @@ void executePartitionGPU(
         return;
     }
     uint32_t numHashTable = endPos - startPos - 1;
-    uint64_t availableMemory = capAggregationMemory(memory_manager.getAvailableMemory(), aggregationMemoryPoolSize);
+    uint64_t availableMemory = capExecutionMemory(memory_manager.getAvailableMemory(), executionMemoryPoolSize);
     uint64_t hashTableSizeMemoryLimit = 0, subgraphEnumerationMemoryLimit = 0, batchSize = 0;
     bool isEdgeTable = false;
     // hashTableSizeMemoryLimit * numHashTable + subgraphEnumerationMemoryLimit <= availableMemory
@@ -478,6 +478,7 @@ void executePartitionGPU(
     if (hashTableSizeMemoryLimit < m * 2 * sizeof(uint64_t)) {
         std::cout <<" WARNING: The hash table size is very small. Please consider setting a smaller ratio value or allocate more memory for this program" << std::endl;
     }
+    update_aggregation_hash_table_stats(hashTableSizeMemoryLimit, numHashTable);
     std::vector<uint32_t> nodesInPartition;
     for (int i = startPos; i < endPos; i++) {
         VertexID nID = postOrder[i];
@@ -535,7 +536,7 @@ void  executeTreeGPU (
         MemoryManager &memory_manager,
         const uint32_t prob_limit,
         float ratio,
-        float aggregationMemoryPoolSize
+        float executionMemoryPoolSize
 ) {
 
     /*************************** create the hashtable in the device memory **************************/
@@ -562,7 +563,7 @@ void  executeTreeGPU (
     /*************************** start compute each partitions **************************/
     for (VertexID pID = 0; pID < t.getPartitionPos().size(); ++pID) {
         executePartitionGPU(pID, t, hashtables, d_nodes, h_nodes, prob_limit, ratio, memory_manager, dun,
-                            aggregationMemoryPoolSize);
+                            executionMemoryPoolSize);
     }
 
     /********* copy the hash table to the host memory *********/
@@ -770,7 +771,7 @@ void multiJoinTreeGPU(
         MemoryManager &memory_manager,
         uint32_t prob_limit,
         float ratio,
-        float aggregationMemoryPoolSize) {
+        float executionMemoryPoolSize) {
 #if HASH_TABLE_TYPE == 0
     WarpcoreWrapper hashtables(t, memory_manager, dun);
 #elif HASH_TABLE_TYPE == 1
@@ -812,7 +813,7 @@ void multiJoinTreeGPU(
 
             /********* allocate memory for each node (subgraphenumeration, hashtable) *****************/
             uint32_t numHashTable = partition.size() - 1;
-            uint64_t availableMemory = capAggregationMemory(memory_manager.getAvailableMemory(), aggregationMemoryPoolSize);
+            uint64_t availableMemory = capExecutionMemory(memory_manager.getAvailableMemory(), executionMemoryPoolSize);
             uint64_t hashTableSizeMemoryLimit = 0, subgraphEnumerationMemoryLimit = 0, batchSize = 0;
             bool isEdgeTable = false;
             // hashTableSizeMemoryLimit * numHashTable + subgraphEnumerationMemoryLimit <= availableMemory
@@ -839,6 +840,7 @@ void multiJoinTreeGPU(
             if (hashTableSizeMemoryLimit < dun.getNumEdges() * 2 * sizeof(uint64_t)) {
                 std::cout <<" WARNING: The hash table size is very small. Please consider setting a smaller ratio value or allocate more memory for this program" << std::endl;
             }
+            update_aggregation_hash_table_stats(hashTableSizeMemoryLimit, numHashTable);
             hashtables.allocatePartitionHashTable(t, memory_manager, hashTableSizeMemoryLimit, partition, rootNodeID);
 
             // get the largest node

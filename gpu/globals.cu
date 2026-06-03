@@ -12,6 +12,10 @@ __constant__ uint32_t C_BASELINE_TABLE_SIZE;
 // Actual definitions
 double global_running_avg = 0.0;
 uint64_t global_total_count = 0;
+uint64_t aggregation_hash_table_allocations = 0;
+uint64_t aggregation_hash_table_total_bytes = 0;
+uint64_t global_hash_table_allocations = 0;
+uint64_t global_hash_table_total_bytes = 0;
 RestartProfileStats current_restart_profile_stats;
 RestartProfileStats global_restart_profile_stats;
 
@@ -19,6 +23,42 @@ void update_global_average(double new_value) {
     global_total_count++;
     // Running average formula: A = A + (new - A) / n
     global_running_avg += (new_value - global_running_avg) / global_total_count;
+}
+
+void reset_aggregation_hash_table_stats() {
+    aggregation_hash_table_allocations = 0;
+    aggregation_hash_table_total_bytes = 0;
+}
+
+void reset_global_aggregation_hash_table_stats() {
+    global_hash_table_allocations = 0;
+    global_hash_table_total_bytes = 0;
+}
+
+void update_aggregation_hash_table_stats(uint64_t hash_table_size_bytes, uint32_t table_count) {
+    if (table_count == 0) {
+        return;
+    }
+    aggregation_hash_table_allocations += table_count;
+    aggregation_hash_table_total_bytes += hash_table_size_bytes * table_count;
+    global_hash_table_allocations += table_count;
+    global_hash_table_total_bytes += hash_table_size_bytes * table_count;
+}
+
+double get_aggregation_average_hash_table_size_bytes() {
+    if (aggregation_hash_table_allocations == 0) {
+        return 0.0;
+    }
+    return static_cast<double>(aggregation_hash_table_total_bytes) /
+           static_cast<double>(aggregation_hash_table_allocations);
+}
+
+double get_global_average_hash_table_size_bytes() {
+    if (global_hash_table_allocations == 0) {
+        return 0.0;
+    }
+    return static_cast<double>(global_hash_table_total_bytes) /
+           static_cast<double>(global_hash_table_allocations);
 }
 
 void reset_restart_profile_stats() {

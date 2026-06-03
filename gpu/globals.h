@@ -18,6 +18,17 @@ extern uint64_t global_total_count;
 // Function to update the average from the CPU side
 void update_global_average(double new_value);
 
+extern uint64_t aggregation_hash_table_allocations;
+extern uint64_t aggregation_hash_table_total_bytes;
+extern uint64_t global_hash_table_allocations;
+extern uint64_t global_hash_table_total_bytes;
+
+void reset_aggregation_hash_table_stats();
+void reset_global_aggregation_hash_table_stats();
+void update_aggregation_hash_table_stats(uint64_t hash_table_size_bytes, uint32_t table_count);
+double get_aggregation_average_hash_table_size_bytes();
+double get_global_average_hash_table_size_bytes();
+
 struct RestartProfileStats {
     uint64_t batchIterations = 0;
     uint64_t restartCount = 0;

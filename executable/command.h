@@ -19,7 +19,7 @@ enum OptionKeyword {
     HashtableSizeFactor = 7, // -ratio, the factor of hash table size
     ProbLimit = 8,           // -prob, the limit of probability
     MemoryPool = 9,          // -mem, the size of memory pool in GB
-    AggregationMemoryPool = 10 // -agg-mem, aggregation memory budget in GB
+    ExecutionMemoryPool = 10 // -exec-mem, execution memory budget in GB
 };
 
 class Command : public CommandParser {
@@ -72,8 +72,8 @@ public:
         return intOptionValue[OptionKeyword::MemoryPool];
     }
 
-    float getAggregationMemoryPoolSize() {
-        return floatOptionValue[OptionKeyword::AggregationMemoryPool];
+    float getExecutionMemoryPoolSize() {
+        return floatOptionValue[OptionKeyword::ExecutionMemoryPool];
     }
 };
 
