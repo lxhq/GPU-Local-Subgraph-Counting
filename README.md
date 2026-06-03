@@ -99,7 +99,9 @@ make
 
 ### 3. Optional Build Arguments
 
-We provide a `HASH_TABLE_TYPE` option to select the backend implementation.
+We provide the following optional CMake arguments.
+
+`HASH_TABLE_TYPE` selects the backend implementation:
 
 | Value | Description | Paper Reference |
 | --- | --- | --- |
@@ -108,12 +110,24 @@ We provide a `HASH_TABLE_TYPE` option to select the backend implementation.
 | **2** | Use lock-based GPU hash tables. | **GPU-SCOPE-LOCK** |
 | **3** | Use dense arrays. | **GPU-SCOPE** |
 
+`ENABLE_OCCUPANCY_PROFILE` controls whether hash-table occupancy instrumentation is compiled:
+
+| Value | Description |
+| --- | --- |
+| **OFF** | **(Default)** Build the normal runtime path without occupancy instrumentation. |
+| **ON** | Enable the `-occupancy-profile` runtime option for reproducing hash-table occupancy measurements. This is intended for profiling only and currently supports `HASH_TABLE_TYPE=1`. |
+
 **Example:**
 
 ```shell
 cmake -DCMAKE_CUDA_ARCHITECTURES=120 -DHASH_TABLE_TYPE=3 ..
 ```
 Build **GPU-SCOPE** variant
+
+```shell
+cmake -DCMAKE_CUDA_ARCHITECTURES=120 -DHASH_TABLE_TYPE=1 -DENABLE_OCCUPANCY_PROFILE=ON ..
+```
+Build **GPU-SCOPE-LF** with hash-table occupancy profiling enabled.
 
 ## Input Format
 
@@ -204,6 +218,7 @@ The following arguments are available for fine-tuning performance.
 | `-exec-mem` | Execution workspace memory budget (in GB). This limits the memory used inside each tree execution, including subgraph-enumeration buffers and aggregation tables. **Default: 0**, meaning no separate execution cap beyond `-mem`. |
 | `-ratio` | Ratio between memory for Subgraph Enumeration (SE) and Hash Table (HT). **Default: 1**. |
 | `-profile-reset` | Measure GPU table reset time, calls, and bytes in stdout. Disabled by default and intended only for profiling/time-breakdown experiments. |
+| `-occupancy-profile` | Print average hash-table occupancy in stdout. This requires building with `-DENABLE_OCCUPANCY_PROFILE=ON` and is currently supported for the lock-free hash-table build (`HASH_TABLE_TYPE=1`) only. |
 
 ## Comparison
 

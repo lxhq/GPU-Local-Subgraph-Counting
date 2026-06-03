@@ -45,3 +45,5 @@ void copyMetaToGPU(
         const EdgeID *reverseID,
         MemoryManager &memory_manager
 );
+
+void setHashTableOccupancyProfileEnabled(bool enabled);

@@ -48,7 +48,9 @@ int main(int argc, char **argv) {
     uint32_t memory_pool_size = cmd.getMemoryPoolSize();
     float execution_memory_pool_size = cmd.getExecutionMemoryPoolSize();
     bool profileReset = cmd.getProfileReset();
+    bool occupancyProfile = cmd.getOccupancyProfile();
     setGpuResetProfileEnabled(profileReset);
+    setHashTableOccupancyProfileEnabled(occupancyProfile);
     std::cout << "query graph path: " << queryGraphPath << std::endl;
     std::cout << "data graph path: " << dataGraphPath << std::endl;
     std::cout << "result path: " << resultPath << std::endl;
@@ -59,6 +61,7 @@ int main(int argc, char **argv) {
     std::cout << "max memory pool size: " << memory_pool_size << " GB" << std::endl;
     std::cout << "execution memory budget: " << execution_memory_pool_size << " GB" << std::endl;
     std::cout << "profile reset time: " << profileReset << std::endl;
+    std::cout << "occupancy profile: " << occupancyProfile << std::endl;
     std::cout << "subgraph matching hashtable ratio: " << ratio << std::endl;
     std::cout << "prob limit: " << prob_limit << std::endl;
     std::cout << "hash table type: " << HASH_TABLE_TYPE << std::endl;
@@ -142,6 +145,7 @@ int main(int argc, char **argv) {
     GpuResetProfileStats totalResetStats;
     reset_global_aggregation_hash_table_stats();
     reset_global_restart_profile_stats();
+    reset_global_hash_table_occupancy_stats();
 
     /************************** Initlize GPU  ******************************/
     /****************** print device information *************/
@@ -251,6 +255,7 @@ int main(int argc, char **argv) {
             totalPlanTime += elapsedSeconds.count();
             reset_aggregation_hash_table_stats();
             reset_restart_profile_stats();
+            reset_hash_table_occupancy_stats();
             if (profileReset) {
                 resetGpuResetProfile();
             }
@@ -471,6 +476,11 @@ int main(int argc, char **argv) {
             std::cout << ", restart truncated prefixes: " << restartStats.truncatedPrefixes;
             std::cout << ", restart truncated fraction: " << get_restart_profile_truncated_fraction(restartStats);
             std::cout << ", restart safeguard count: " << restartStats.safeguardCount;
+            if (occupancyProfile) {
+                HashTableOccupancyStats occupancyStats = get_hash_table_occupancy_stats();
+                std::cout << ", hash table occupancy samples: " << occupancyStats.samples;
+                std::cout << ", average hash table occupancy: " << get_average_hash_table_occupancy(occupancyStats);
+            }
             std::cout << ", current average batch size: " << global_running_avg << std::endl;
             totalExeTime += exeTime;
             totalNumPatterns += numPatterns;
@@ -516,6 +526,11 @@ int main(int argc, char **argv) {
         std::cout << "total restart truncated prefixes: " << totalRestartStats.truncatedPrefixes << std::endl;
         std::cout << "total restart truncated fraction: " << get_restart_profile_truncated_fraction(totalRestartStats) << std::endl;
         std::cout << "total restart safeguard count: " << totalRestartStats.safeguardCount << std::endl;
+        if (occupancyProfile) {
+            HashTableOccupancyStats totalOccupancyStats = get_global_hash_table_occupancy_stats();
+            std::cout << "total hash table occupancy samples: " << totalOccupancyStats.samples << std::endl;
+            std::cout << "total average hash table occupancy: " << get_average_hash_table_occupancy(totalOccupancyStats) << std::endl;
+        }
     }
 
     if (shareNode) {

@@ -20,7 +20,8 @@ enum OptionKeyword {
     ProbLimit = 8,           // -prob, the limit of probability
     MemoryPool = 9,          // -mem, the size of memory pool in GB
     ExecutionMemoryPool = 10, // -exec-mem, execution memory budget in GB
-    ProfileReset = 11        // -profile-reset, profile GPU table reset time
+    ProfileReset = 11,        // -profile-reset, profile GPU table reset time
+    OccupancyProfile = 12     // -occupancy-profile, profile hash-table occupancy
 };
 
 class Command : public CommandParser {
@@ -79,6 +80,10 @@ public:
 
     bool getProfileReset() {
         return booleanOptionValue[OptionKeyword::ProfileReset];
+    }
+
+    bool getOccupancyProfile() {
+        return booleanOptionValue[OptionKeyword::OccupancyProfile];
     }
 };
 

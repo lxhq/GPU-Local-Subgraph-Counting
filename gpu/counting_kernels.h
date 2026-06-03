@@ -11,6 +11,10 @@
 #include "lock_based_composite_hashtable.h"
 #include "lock_free_hashtable.h"
 
+#if ENABLE_OCCUPANCY_PROFILE
+extern __device__ uint64_t* D_OCCUPANCY_COUNTERS;
+#endif
+
 __global__ void firstLevelKernel(uint32_t index_len, uint32_t next_start_index, uint32_t count, uint32_t* target_);
 
 __global__ void countKernel(uint32_t index_len, uint32_t depth, uint32_t* embedding, uint64_t embedding_size, uint32_t* matching_count, NodeGPU* d_node);
@@ -142,4 +146,3 @@ __global__ void writeToHashTableWithEdgeKeyKernel(
         uint32_t nID,
         uint32_t prob_limit
 );
-

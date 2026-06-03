@@ -21,6 +21,9 @@ __device__ bool insertHashTable(
     uint32_t key_2,
     uint32_t prob_limit,
     uint64_t value
+#if ENABLE_OCCUPANCY_PROFILE
+    , uint64_t* occupancy_counter
+#endif
 ) {
     if (value == 0) {
         return true;
@@ -36,6 +39,11 @@ __device__ bool insertHashTable(
             old_value = atomicCAS(bucket_pos, 0, combined);
             if (old_value == 0 || old_value == combined) {
                 inserted = true;
+#if ENABLE_OCCUPANCY_PROFILE
+                if (old_value == 0 && occupancy_counter != nullptr) {
+                    atomicAdd(reinterpret_cast<unsigned long long*>(occupancy_counter), 1ULL);
+                }
+#endif
                 atomicAdd(bucket_pos + 1, value);
                 break;
             }

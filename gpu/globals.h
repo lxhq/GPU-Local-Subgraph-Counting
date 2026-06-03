@@ -45,3 +45,15 @@ RestartProfileStats get_restart_profile_stats();
 RestartProfileStats get_global_restart_profile_stats();
 double get_restart_profile_rate(const RestartProfileStats &stats);
 double get_restart_profile_truncated_fraction(const RestartProfileStats &stats);
+
+struct HashTableOccupancyStats {
+    uint64_t samples = 0;
+    double occupancySum = 0.0;
+};
+
+void reset_hash_table_occupancy_stats();
+void reset_global_hash_table_occupancy_stats();
+void record_hash_table_occupancy(uint64_t occupiedBuckets, uint64_t totalBuckets);
+HashTableOccupancyStats get_hash_table_occupancy_stats();
+HashTableOccupancyStats get_global_hash_table_occupancy_stats();
+double get_average_hash_table_occupancy(const HashTableOccupancyStats &stats);

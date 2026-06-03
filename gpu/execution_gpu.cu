@@ -1,5 +1,79 @@
 #include "execution_gpu.h"
 
+#include <stdexcept>
+
+namespace {
+bool gHashTableOccupancyProfileEnabled = false;
+uint64_t *gHashTableOccupancyCounters = nullptr;
+
+void bindOccupancyCounters(uint64_t *counters) {
+#if ENABLE_OCCUPANCY_PROFILE
+    cudaErrorCheck(cudaMemcpyToSymbol(D_OCCUPANCY_COUNTERS, &counters, sizeof(uint64_t*)));
+#else
+    (void)counters;
+#endif
+}
+
+void resetOccupancyCounter(uint32_t nID) {
+#if ENABLE_OCCUPANCY_PROFILE
+    if (gHashTableOccupancyCounters != nullptr) {
+        cudaErrorCheck(cudaMemset(gHashTableOccupancyCounters + nID, 0, sizeof(uint64_t)));
+    }
+#else
+    (void)nID;
+#endif
+}
+
+void allocateOccupancyCounters(uint32_t numTreeNodes) {
+#if ENABLE_OCCUPANCY_PROFILE && HASH_TABLE_TYPE == 1
+    if (!gHashTableOccupancyProfileEnabled || numTreeNodes == 0) {
+        bindOccupancyCounters(nullptr);
+        return;
+    }
+    cudaErrorCheck(cudaMallocManaged(&gHashTableOccupancyCounters, sizeof(uint64_t) * numTreeNodes));
+    cudaErrorCheck(cudaMemset(gHashTableOccupancyCounters, 0, sizeof(uint64_t) * numTreeNodes));
+    bindOccupancyCounters(gHashTableOccupancyCounters);
+#else
+    (void)numTreeNodes;
+    bindOccupancyCounters(nullptr);
+#endif
+}
+
+void releaseOccupancyCounters() {
+    bindOccupancyCounters(nullptr);
+    if (gHashTableOccupancyCounters != nullptr) {
+        cudaErrorCheck(cudaFree(gHashTableOccupancyCounters));
+        gHashTableOccupancyCounters = nullptr;
+    }
+}
+
+void recordOccupancyCounter(uint32_t nID, uint64_t totalBuckets) {
+#if ENABLE_OCCUPANCY_PROFILE
+    if (gHashTableOccupancyCounters == nullptr) {
+        return;
+    }
+    uint64_t occupiedBuckets = 0;
+    cudaErrorCheck(cudaMemcpy(&occupiedBuckets, gHashTableOccupancyCounters + nID, sizeof(uint64_t), cudaMemcpyDeviceToHost));
+    record_hash_table_occupancy(occupiedBuckets, totalBuckets);
+#else
+    (void)nID;
+    (void)totalBuckets;
+#endif
+}
+} // namespace
+
+void setHashTableOccupancyProfileEnabled(bool enabled) {
+    if (enabled) {
+#if !ENABLE_OCCUPANCY_PROFILE
+        throw std::runtime_error("-occupancy-profile requires building with -DENABLE_OCCUPANCY_PROFILE=ON");
+#endif
+#if HASH_TABLE_TYPE != 1
+        throw std::runtime_error("-occupancy-profile currently supports HASH_TABLE_TYPE=1 only");
+#endif
+    }
+    gHashTableOccupancyProfileEnabled = enabled;
+}
+
 inline uint32_t growBatchStep(uint32_t step) {
     if (step == UINT32_MAX) {
         return step;
@@ -315,8 +389,12 @@ void simpleTreeHelper(
             // enumerate the node, pass target[start:end) with reference
             *hd_failed_write = UINT64_MAX;
             hashtables.clearPartitionHashTable(nID);
+            resetOccupancyCounter(nID);
             trivalNodeHelper(target + start * (index_len + 1 + level), end - start, memory_manager, dun, d_nodes[nID], h_nodes[nID],
                 level + 1, t, nID, hashtables, prob_limit, target_memory_size, index_len, hd_failed_write);
+            if (nID != partitionRootNodeID) {
+                recordOccupancyCounter(nID, hashtables.getPartitionHashTableBucketSize());
+            }
             
             // update end if there is any insert failed
             if (*hd_failed_write != UINT64_MAX) {
@@ -548,6 +626,7 @@ void  executeTreeGPU (
 #elif HASH_TABLE_TYPE == 3
     DenseArrayWrapper hashtables(t, memory_manager, dun);
 #endif
+    allocateOccupancyCounters(t.getNumNodes());
 
     /*************************** create and copy all nodes to device memory **************************/
     std::vector<NodeGPU*> d_nodes;
@@ -572,6 +651,7 @@ void  executeTreeGPU (
     for (int nID = t.getNumNodes() - 1; nID >= 0; nID--) {
         memory_manager.release(d_nodes[nID]);
     }
+    releaseOccupancyCounters();
     hashtables.release(t, memory_manager);
 }
 
@@ -696,11 +776,15 @@ void complexTreeHelper(
                 level);
             cudaErrorCheck(cudaDeviceSynchronize());
             hashtables.clearPartitionHashTable(cID);
+            resetOccupancyCounter(cID);
             complexTreeHelper(cID, copied_target, end - start, memory_manager, dun, d_nodes, h_nodes,
                             h_nodes[cID].prefixPosCount, t, hashtables, prob_limit, target_memory_size,
                         index_len, hd_failed_write, partitionRootNodeID, steps, batchSize, isSafeGuardMode);
             // release copy prefix
             memory_manager.release(copied_target);
+            if (cID != partitionRootNodeID) {
+                recordOccupancyCounter(cID, hashtables.getPartitionHashTableBucketSize());
+            }
 
             // update end if there is any insert failed
             if (*hd_failed_write != UINT64_MAX) {
@@ -779,6 +863,7 @@ void multiJoinTreeGPU(
 #elif HASH_TABLE_TYPE == 3
     DenseArrayWrapper hashtables(t, memory_manager, dun);
 #endif
+    allocateOccupancyCounters(t.getNumNodes());
     
     /********** compute the size of the prefix and hashtable *********/
     std::vector<uint32_t> runningNodes;
@@ -873,5 +958,6 @@ void multiJoinTreeGPU(
     }
 
     /********* release the memory ********************/
+    releaseOccupancyCounters();
     hashtables.release(t, memory_manager);
 }

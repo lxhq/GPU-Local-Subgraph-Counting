@@ -20,3 +20,7 @@
 #ifndef HASH_TABLE_TYPE
   #define HASH_TABLE_TYPE 1u
 #endif
+
+#ifndef ENABLE_OCCUPANCY_PROFILE
+  #define ENABLE_OCCUPANCY_PROFILE 0
+#endif

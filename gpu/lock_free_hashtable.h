@@ -10,6 +10,9 @@ __device__ bool insertHashTable(
     uint32_t key_2,
     uint32_t prob_limit,
     uint64_t value
+#if ENABLE_OCCUPANCY_PROFILE
+    , uint64_t* occupancy_counter = nullptr
+#endif
 );
 
 __device__ uint64_t lookupHashTable(

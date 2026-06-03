@@ -23,6 +23,8 @@ if(NOT DEFINED HASH_TABLE_TYPE)
     set(HASH_TABLE_TYPE 1)
 endif()
 
+option(ENABLE_OCCUPANCY_PROFILE "Enable hash-table occupancy profiling instrumentation" OFF)
+
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
@@ -43,6 +45,7 @@ CPMAddPackage(
 # Pass to all subdirectories via global definition
 add_compile_definitions(
   HASH_TABLE_TYPE=${HASH_TABLE_TYPE}
+  ENABLE_OCCUPANCY_PROFILE=$<BOOL:${ENABLE_OCCUPANCY_PROFILE}>
 )
 
 include_directories(

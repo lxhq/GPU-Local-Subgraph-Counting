@@ -1,5 +1,9 @@
 #include "counting_kernels.h"
 
+#if ENABLE_OCCUPANCY_PROFILE
+__device__ uint64_t* D_OCCUPANCY_COUNTERS = nullptr;
+#endif
+
 
 __forceinline__ __device__ uint64_t lookup(
     uint64_t* h,
@@ -68,6 +72,9 @@ __forceinline__ __device__ bool insert(
             key,
             prob_limit,
             cnt
+#if ENABLE_OCCUPANCY_PROFILE
+            , D_OCCUPANCY_COUNTERS == nullptr ? nullptr : D_OCCUPANCY_COUNTERS + insertNodeID
+#endif
     );
 #elif HASH_TABLE_TYPE == 2
     return !insertLockHashTable(

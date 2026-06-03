@@ -18,6 +18,8 @@ uint64_t global_hash_table_allocations = 0;
 uint64_t global_hash_table_total_bytes = 0;
 RestartProfileStats current_restart_profile_stats;
 RestartProfileStats global_restart_profile_stats;
+HashTableOccupancyStats current_hash_table_occupancy_stats;
+HashTableOccupancyStats global_hash_table_occupancy_stats;
 
 void update_global_average(double new_value) {
     global_total_count++;
@@ -113,4 +115,39 @@ double get_restart_profile_truncated_fraction(const RestartProfileStats &stats) 
         return 0.0;
     }
     return static_cast<double>(stats.truncatedPrefixes) / static_cast<double>(stats.attemptedPrefixes);
+}
+
+void reset_hash_table_occupancy_stats() {
+    current_hash_table_occupancy_stats = HashTableOccupancyStats{};
+}
+
+void reset_global_hash_table_occupancy_stats() {
+    global_hash_table_occupancy_stats = HashTableOccupancyStats{};
+}
+
+void record_hash_table_occupancy(uint64_t occupiedBuckets, uint64_t totalBuckets) {
+    if (totalBuckets == 0) {
+        return;
+    }
+    double occupancy = static_cast<double>(occupiedBuckets) / static_cast<double>(totalBuckets);
+    current_hash_table_occupancy_stats.samples += 1;
+    current_hash_table_occupancy_stats.occupancySum += occupancy;
+
+    global_hash_table_occupancy_stats.samples += 1;
+    global_hash_table_occupancy_stats.occupancySum += occupancy;
+}
+
+HashTableOccupancyStats get_hash_table_occupancy_stats() {
+    return current_hash_table_occupancy_stats;
+}
+
+HashTableOccupancyStats get_global_hash_table_occupancy_stats() {
+    return global_hash_table_occupancy_stats;
+}
+
+double get_average_hash_table_occupancy(const HashTableOccupancyStats &stats) {
+    if (stats.samples == 0) {
+        return 0.0;
+    }
+    return stats.occupancySum / static_cast<double>(stats.samples);
 }
