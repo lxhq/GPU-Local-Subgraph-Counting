@@ -329,6 +329,17 @@ Cost fraction = Restart cost / adaptive-record runtime
 
 If a replay run still reports nonzero restarts, record a refined schedule by using `-replay-restart-schedule` and `-record-restart-schedule` together with different paths, then replay the refined schedule.
 
+### Nsight Compute Metrics
+
+We profile these GPU implementations using the three metrics below, which are
+available on RTX 5090:
+
+| Figure metric | Nsight Compute metric | How it is used |
+| --- | --- | --- |
+| Instructions per cycle | `sm__inst_executed.avg.per_cycle_active` | Averaged across profiled kernels, weighted by kernel duration. |
+| Global writes (GB) | `dram__bytes_write.sum` | Summed across profiled kernel invocations and converted to GB. |
+| Atomic active cycles (M) | `lts__d_atomic_input_cycles_active.avg` | Multiplied by the number of invocations, summed across profiled kernels, and converted to millions of cycles. |
+
 ## Comparison
 
 In the paper, we report the speedup over the original CPU SCOPE implementation. Our goal is to process queries **without any pre-built index**. We found that the original [SCOPE](https://github.com/magic62442/subgraph-counting) code may encounter runtime errors when running without a pre-built triangle index (```-t``` option).
