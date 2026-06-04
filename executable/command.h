@@ -26,7 +26,8 @@ enum OptionKeyword {
     ReplayBatchSchedule = 14, // -replay-batch-schedule, replay adaptive GPU batch schedule
     MatchOnly = 15,           // -match-only, run without table reset and join aggregation
     RecordRestartSchedule = 16, // -record-restart-schedule, write completed restart-safe batch ranges
-    ReplayRestartSchedule = 17  // -replay-restart-schedule, replay completed restart-safe batch ranges
+    ReplayRestartSchedule = 17, // -replay-restart-schedule, replay completed restart-safe batch ranges
+    QueryStructureProfile = 18  // -query-structure-profile, print query decomposition properties and exit
 };
 
 class Command : public CommandParser {
@@ -109,6 +110,10 @@ public:
 
     std::string getReplayRestartSchedulePath() {
         return optionsValue[OptionKeyword::ReplayRestartSchedule];
+    }
+
+    bool getQueryStructureProfile() {
+        return booleanOptionValue[OptionKeyword::QueryStructureProfile];
     }
 };
 

@@ -6,6 +6,7 @@
 #include "execution.h"
 #include "execution_gpu.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <stdexcept>
 
@@ -38,6 +39,62 @@ std::string schedulePathForQuery(
         fs::create_directories(base.parent_path());
     }
     return base.string();
+}
+
+struct QueryStructureSummary {
+    ui partitionNumber = 0;
+    ui sharedVertexSetSize = 0;
+    ui codeTreeWidth = 0;
+
+    ui graphTheoryTreeWidth() const {
+        return codeTreeWidth > 0 ? codeTreeWidth - 1 : 0;
+    }
+};
+
+void updateQueryStructureSummary(const Tree &tree, QueryStructureSummary &summary) {
+    summary.partitionNumber = std::max(summary.partitionNumber, static_cast<ui>(tree.getPartitionPos().size()));
+    summary.codeTreeWidth = std::max(summary.codeTreeWidth, tree.getTreeWidth());
+    for (VertexID nID = 0; nID < tree.getNumNodes(); ++nID) {
+        summary.sharedVertexSetSize = std::max(summary.sharedVertexSetSize, tree.getNode(nID).cutSize);
+    }
+}
+
+QueryStructureSummary summarizeQueryStructure(
+    const std::map<int, std::vector<std::vector<Tree>>> &trees
+) {
+    QueryStructureSummary summary;
+    for (const auto &divideFactorTrees: trees) {
+        for (const auto &patternTrees: divideFactorTrees.second) {
+            for (const Tree &tree: patternTrees) {
+                updateQueryStructureSummary(tree, summary);
+            }
+        }
+    }
+    return summary;
+}
+
+void printQueryStructureProfile(
+    const std::string &queryGraphPath,
+    bool batchQuery,
+    bool useTriangle
+) {
+    std::vector<std::string> files;
+    std::vector<PatternGraph> patternGraphs = loadPatternGraph(queryGraphPath, batchQuery, files);
+
+    std::cout << "query\tpartition_number\tshared_vertex_set_size\ttree_width" << std::endl;
+    for (int i = 0; i < patternGraphs.size(); ++i) {
+        std::map<int, std::vector<Pattern>> patterns;
+        std::map<int, std::vector<std::vector<Tree>>> trees;
+        ConNode cn;
+        genEquation(patternGraphs[i], patterns, trees, cn, useTriangle, true, true, true);
+
+        QueryStructureSummary summary = summarizeQueryStructure(trees);
+        std::string queryName = batchQuery ? files[i] : std::filesystem::path(files[i]).filename().string();
+        std::cout << queryName << "\t"
+                  << summary.partitionNumber << "\t"
+                  << summary.sharedVertexSetSize << "\t"
+                  << summary.graphTheoryTreeWidth() << std::endl;
+    }
 }
 } // namespace
 
@@ -85,6 +142,7 @@ int main(int argc, char **argv) {
     bool profileReset = cmd.getProfileReset();
     bool occupancyProfile = cmd.getOccupancyProfile();
     bool matchOnly = cmd.getMatchOnly();
+    bool queryStructureProfile = cmd.getQueryStructureProfile();
     std::string recordBatchSchedulePath = cmd.getRecordBatchSchedulePath();
     std::string replayBatchSchedulePath = cmd.getReplayBatchSchedulePath();
     std::string recordRestartSchedulePath = cmd.getRecordRestartSchedulePath();
@@ -130,6 +188,7 @@ int main(int argc, char **argv) {
     std::cout << "execution memory budget: " << execution_memory_pool_size << " GB" << std::endl;
     std::cout << "profile reset time: " << profileReset << std::endl;
     std::cout << "occupancy profile: " << occupancyProfile << std::endl;
+    std::cout << "query structure profile: " << queryStructureProfile << std::endl;
     std::cout << "record batch schedule path: " << recordBatchSchedulePath << std::endl;
     std::cout << "replay batch schedule path: " << replayBatchSchedulePath << std::endl;
     std::cout << "record restart schedule path: " << recordRestartSchedulePath << std::endl;
@@ -137,6 +196,10 @@ int main(int argc, char **argv) {
     std::cout << "subgraph matching hashtable ratio: " << ratio << std::endl;
     std::cout << "prob limit: " << prob_limit << std::endl;
     std::cout << "hash table type: " << HASH_TABLE_TYPE << std::endl;
+    if (queryStructureProfile) {
+        printQueryStructureProfile(queryGraphPath, batchQuery, useTriangle);
+        return 0;
+    }
     DataGraph dun = DataGraph();
     dun.loadDataGraph(dataGraphPath);
     const DataGraph din = constructDirectedDataGraph(dun, false);

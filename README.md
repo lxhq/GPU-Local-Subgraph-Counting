@@ -219,6 +219,19 @@ The following arguments are available for fine-tuning performance.
 | `-ratio` | Ratio between memory for Subgraph Enumeration (SE) and Hash Table (HT). **Default: 1**. |
 | `-occupancy-profile` | Print average hash-table occupancy in stdout. This requires building with `-DENABLE_OCCUPANCY_PROFILE=ON` and is currently supported for the lock-free hash-table build (`HASH_TABLE_TYPE=1`) only. |
 
+### Query-Structure Profiling
+
+Use `-query-structure-profile` to print the decomposition properties used in the query-structure analysis and exit without running the data-graph computation. This mode only requires `-q` and optional `-b`.
+
+```shell
+./build/executable/scope.out \
+  -q ./exp/pattern_graph/6voc/ \
+  -b \
+  -query-structure-profile
+```
+
+The output columns are `query`, `partition_number`, `shared_vertex_set_size`, and `tree_width`. These values are computed as the maximum over all generated decomposition trees of each query; `tree_width` is reported as the graph-theoretic tree width, i.e., the internal code width minus one.
+
 ### Time-Breakdown Profiling
 
 The following options are intended for reproducing the component-level time-breakdown experiments. They are disabled by default for normal runs.

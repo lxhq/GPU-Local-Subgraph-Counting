@@ -22,6 +22,7 @@ Command::Command(int argc, char **argv) : CommandParser(argc, argv){
     optionsKey[OptionKeyword::MatchOnly] = "-match-only";
     optionsKey[OptionKeyword::RecordRestartSchedule] = "-record-restart-schedule";
     optionsKey[OptionKeyword::ReplayRestartSchedule] = "-replay-restart-schedule";
+    optionsKey[OptionKeyword::QueryStructureProfile] = "-query-structure-profile";
     floatOptionValue[OptionKeyword::HashtableSizeFactor] = 1.0;
     floatOptionValue[OptionKeyword::ExecutionMemoryPool] = 0.0;
     intOptionValue[OptionKeyword::ProbLimit] = 64;
@@ -31,6 +32,7 @@ Command::Command(int argc, char **argv) : CommandParser(argc, argv){
     booleanOptionValue[OptionKeyword::ProfileReset] = false;
     booleanOptionValue[OptionKeyword::OccupancyProfile] = false;
     booleanOptionValue[OptionKeyword::MatchOnly] = false;
+    booleanOptionValue[OptionKeyword::QueryStructureProfile] = false;
     processOptions();
 }
 
@@ -60,4 +62,5 @@ void Command::processOptions() {
     booleanOptionValue[OptionKeyword::ProfileReset] = commandOptionExists(optionsKey[OptionKeyword::ProfileReset]);
     booleanOptionValue[OptionKeyword::OccupancyProfile] = commandOptionExists(optionsKey[OptionKeyword::OccupancyProfile]);
     booleanOptionValue[OptionKeyword::MatchOnly] = commandOptionExists(optionsKey[OptionKeyword::MatchOnly]);
+    booleanOptionValue[OptionKeyword::QueryStructureProfile] = commandOptionExists(optionsKey[OptionKeyword::QueryStructureProfile]);
 }
