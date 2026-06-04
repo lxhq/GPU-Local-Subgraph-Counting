@@ -1,0 +1,33 @@
+# CMake/build outputs
+/build/
+/build_*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# Local run outputs
+/result/
+/results/
+/tmp/
+/tmp-results/
+/tmp-results-2/
+*.log
+
+# Local verification helpers/outputs
+/verify_scope_mt_local.sh
+/scope-mt-macro-off-test/
+/scope-mt-macro-on-timebreak-test/
+
+# Nauty generated build artifacts
+/utility/automorphism/makefile
+/utility/automorphism/config.log
+/utility/automorphism/config.status
+/utility/automorphism/*.o
+/utility/automorphism/*.a
+
+# Editor/OS noise
+.DS_Store
+*.swp
+*.swo
+*~
