@@ -88,12 +88,12 @@ For example, if an **RTX 5090** is used, it has a compute capability of **12.0**
 
 ### 2. Compile the Project
 
-Build the project using CMake. Replace `120`(12.0 → 120) below with your GPU's specific architecture code.
+Build the project using CMake. Replace `120` below with your GPU's specific architecture code. For example, compute capability 12.0 corresponds to `120`.
 
 ```shell
-mkdir build
+mkdir -p build
 cd build
-cmake -DCMAKE_CUDA_ARCHITECTURES=120 ..
+cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=120 ..
 make
 ```
 
@@ -120,14 +120,14 @@ We provide the following optional CMake arguments.
 **Example:**
 
 ```shell
-cmake -DCMAKE_CUDA_ARCHITECTURES=120 -DHASH_TABLE_TYPE=3 ..
+cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=120 -DHASH_TABLE_TYPE=3 ..
 ```
-Build **GPU-SCOPE** variant
+Build the **GPU-SCOPE** variant.
 
 ```shell
-cmake -DCMAKE_CUDA_ARCHITECTURES=120 -DHASH_TABLE_TYPE=1 -DENABLE_OCCUPANCY_PROFILE=ON ..
+cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=120 -DHASH_TABLE_TYPE=1 -DENABLE_OCCUPANCY_PROFILE=ON ..
 ```
-Build **GPU-SCOPE-LF** with hash-table occupancy profiling enabled.
+Build the **GPU-SCOPE-LF** variant with hash-table occupancy profiling enabled.
 
 ## Input Format
 
@@ -192,7 +192,9 @@ The executable is located at `./build/executable/scope.out`.
   -r ./result/web-spam/5voc/ \
   -b
 ```
-> **Note:** Please make sure the result directory exist. Otherwise, the result file won't be written. For example, please make sure '''./result/web-spam/5voc/''' exist before executing above commands.
+
+> **Note:** Please make sure the result directory exists. Otherwise, the result files will not be written. For example, please make sure `./result/web-spam/5voc/` exists before executing the batch command above.
+
 ### Output
 
 The output file contains the local subgraph counts. The $i$-th line corresponds to the count for **Vertex ID $i-1$** in the data graph.
@@ -223,6 +225,10 @@ The following arguments are available for fine-tuning performance.
 
 Use `-query-structure-profile` to print the decomposition properties used in the query-structure analysis and exit without running the data-graph computation. This mode only requires `-q` and optional `-b`.
 
+| Option | Description |
+| --- | --- |
+| `-query-structure-profile` | Print query-decomposition properties and exit before data-graph execution. Requires `-q`; supports `-b` for a query directory. |
+
 ```shell
 ./build/executable/scope.out \
   -q ./exp/pattern_graph/6voc/ \
@@ -234,6 +240,25 @@ The output columns are `query`, `partition_number`, `shared_vertex_set_size`, an
 
 ### Time-Breakdown Profiling
 
+The time-breakdown experiment uses three runs to isolate the main components without changing the normal execution path. Directly inserting timers around every internal operation is undesirable because the components are coupled through the batch schedule, and fine-grained timer instrumentation can perturb GPU execution. Since batch boundaries may vary across executions, we record and replay the batch schedule so that all component measurements use the same batch boundaries.
+
+In the first run, the program executes normally. This gives the clean total runtime.
+
+In the second run, the program executes normally with reset profiling enabled and records the batch schedule. This run provides the table-reset time and the batch boundaries used for replay. Its total runtime is not used as the clean total runtime in the reported breakdown.
+
+In the third run, the program replays the same workload using the recorded batch schedule with `-match-only`, which disables table reset and join aggregation. Therefore, the replay measures the subgraph-enumeration time under the same batch boundaries.
+
+The component times are computed as follows:
+
+```text
+Total runtime             = clean normal runtime
+Subgraph enumeration time = match-only replay runtime in the third run
+Table reset time          = table-reset time reported in the second run
+Join-aggregation time     = Total runtime
+                            - Subgraph enumeration time
+                            - Table reset time
+```
+
 The following options are intended for reproducing the component-level time-breakdown experiments. They are disabled by default for normal runs.
 
 | Option | Description |
@@ -243,9 +268,7 @@ The following options are intended for reproducing the component-level time-brea
 | `-replay-batch-schedule <path>` | Replay a previously recorded adaptive GPU batch schedule from a binary file or directory. |
 | `-match-only` | Run without any table-reset and join-aggregation operations. This option must be used together with `-replay-batch-schedule`. |
 
-We use these options to keep the adaptive batch decisions fixed when measuring different components. For the reported time breakdown, we use three timing sources.
-
-First, run the normal computation without profiling flags. This gives the clean total runtime:
+First, run the normal execution:
 
 ```shell
 ./build/executable/scope.out \
@@ -255,7 +278,7 @@ First, run the normal computation without profiling flags. This gives the clean 
   -b
 ```
 
-Second, run the normal computation with reset profiling and record the batch schedule. This run is used to measure table-reset time and to save the schedule; its total runtime is not used as the clean total runtime in the reported breakdown:
+Second, run the normal execution with reset profiling and schedule recording enabled:
 
 ```shell
 ./build/executable/scope.out \
@@ -267,7 +290,7 @@ Second, run the normal computation with reset profiling and record the batch sch
   -record-batch-schedule ./result/web-spam/5voc_schedule/
 ```
 
-Third, replay the same batch schedule in match-only mode to measure subgraph enumeration under the same batch decisions:
+Third, replay the recorded schedule with match-only mode enabled:
 
 ```shell
 ./build/executable/scope.out \
@@ -278,29 +301,23 @@ Third, replay the same batch schedule in match-only mode to measure subgraph enu
   -match-only
 ```
 
-The component times are computed as:
-
-```text
-Total = clean normal runtime
-SM    = match-only replay runtime
-Reset = table-reset time from the profiled normal-record run
-JA    = Total - SM - Reset
-```
-
-For quick local checks, the profiled normal-record run can also provide an approximate total runtime, but the reported figures use the clean normal runtime when available.
-
 ### Restart-Cost Profiling
 
-The restart-cost experiment records the completed prefix ranges from an adaptive run, then replays those completed ranges to avoid restart rediscovery.
+The restart-cost experiment uses two main runs. In the first run, the program executes normally and records the prefix ranges that finish successfully before each hash-table insertion failure. In the second run, the program replays the same workload using these recorded prefix ranges as fixed batch boundaries. Therefore, the replay skips the trial ranges that previously triggered insertion failures. Since each restart is caused by such an insertion failure, this replay reduces the restart count and the refined replay is used for the restart-free timing. We estimate the restart discovery cost as:
+
+```text
+Restart cost = record-run runtime - restart-free replay runtime
+Cost fraction = Restart cost / record-run runtime
+```
 
 | Option | Description |
 | --- | --- |
-| `-record-restart-schedule <path>` | Write the completed restart-safe batch ranges to a binary file or directory. In batch-query mode, one `.schedule.bin` file is written per query. |
-| `-replay-restart-schedule <path>` | Replay previously recorded restart-safe batch ranges. |
+| `-record-restart-schedule <path>` | Write the completed prefix ranges that finish before hash-table insertion failures to a binary file or directory. In batch-query mode, one `.schedule.bin` file is written per query. |
+| `-replay-restart-schedule <path>` | Replay previously recorded completed prefix ranges as fixed batch boundaries. |
 
-Restart frequency is reported directly in the normal stdout. A restart is counted when a planned prefix batch is truncated by a hash-table insertion failure. The printed fields include the number of restart profile batch iterations, restart count, attempted prefixes, completed prefixes, truncated prefixes, truncated fraction, and safeguard count.
+No extra option is required for restart-frequency profiling; normal execution always prints the restart counters. A restart is counted when a planned prefix batch is truncated by a hash-table insertion failure. The printed fields include the number of restart profile batch iterations, restart count, attempted prefixes, completed prefixes, truncated prefixes, truncated fraction, and safeguard count.
 
-For restart cost, first run the normal adaptive execution while recording the completed restart-safe ranges:
+First, run the normal execution with schedule recording enabled:
 
 ```shell
 ./build/executable/scope.out \
@@ -318,13 +335,6 @@ Then replay the recorded ranges:
   -d ./exp/data_graph/web-spam.txt \
   -r ./result/web-spam/6voc_103_replay.txt \
   -replay-restart-schedule ./result/web-spam/6voc_103_restart.schedule.bin
-```
-
-The restart discovery cost is computed as:
-
-```text
-Restart cost = adaptive-record runtime - zero-restart replay runtime
-Cost fraction = Restart cost / adaptive-record runtime
 ```
 
 If a replay run still reports nonzero restarts, record a refined schedule by using `-replay-restart-schedule` and `-record-restart-schedule` together with different paths, then replay the refined schedule.
